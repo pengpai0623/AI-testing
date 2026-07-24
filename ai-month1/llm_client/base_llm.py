@@ -1,10 +1,21 @@
 import os
 import requests
 from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, RetryCallState
 from typing import List, Dict, Optional
 
 # 加载环境变量
 load_dotenv()
+
+# 重试全局配置
+MAX_RETRY_TIMES = 3   # 最大重试3次
+RETRY_WAIT_SEC = 2    # 每次重试间隔2秒
+
+def retry_log_callback(retry_state: RetryCallState):
+    """每次重试触发时打印日志"""
+
+    exc = retry_state.outcome.exception()
+    print(f"【LLM重试】第{retry_state.attempt_number}次重试，等待{RETRY_WAIT_SEC}s，异常：{exc}")
 
 class LLMBaseClient:
     def __init__(self):
@@ -21,7 +32,12 @@ class LLMBaseClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-
+    @retry(
+        stop=stop_after_attempt(MAX_RETRY_TIMES),
+        wait=wait_fixed(RETRY_WAIT_SEC),
+        retry=retry_if_exception_type((requests.exceptions.Timeout, requests.exceptions.ConnectionError)),
+        before_sleep=retry_log_callback
+    )
     def _request_messages(
         self,
         messages: List[Dict[str, str]],
@@ -66,7 +82,19 @@ class LLMBaseClient:
             return {"status": "conn_error", "content": "网络连接失败，无法访问模型接口"}
         except requests.exceptions.HTTPError as http_err:
             resp_text = resp.text if "resp" in locals() else ""
-            return {"status": "http_err", "content": f"接口异常：{str(http_err)}，响应内容：{resp_text}"}
+            status_code = resp.status_code if "resp" in locals() else 0
+
+            if status_code == 429:
+            # 文案提示限流，单独返回，绝不重试
+                return {"status": "limit_429", "content": "接口调用触发限流，请降低调用频率，稍后重试"}
+            elif status_code in [400, 401, 403]:
+            # 参数、密钥错误，重试没用
+                return {"status": "http_err", "content": f"接口异常{status_code}：{str(http_err)}，响应：{resp_text}"}
+            elif status_code in [502, 503]:
+            # 临时服务故障，抛出异常触发重试
+                raise ConnectionError(f"服务临时不可用 {status_code}")
+            else:
+                return {"status": "http_err", "content": f"接口异常：{str(http_err)}，响应内容：{resp_text}"}
         except Exception as e:
             return {"status": "unknown_err", "content": f"未知异常：{str(e)}"}
 

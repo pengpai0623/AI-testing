@@ -119,7 +119,7 @@ class LLMBaseClient:
         messages: List[Dict[str, str]] = []
         # ✅ 修复：system必须是role=system，不能是user
         if system_prompt:
-            messages.append({"role": "c", "content": system_prompt})
+            messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
         return self._request_messages(messages, use_timeout, temperature)

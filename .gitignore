@@ -1,3 +1,9 @@
 # 环境变量文件
 .env
 ai-env/
+
+# Python字节码缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

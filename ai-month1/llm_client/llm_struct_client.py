@@ -1,9 +1,16 @@
-from base_llm import LLMBaseClient
-from struct_schema_model import ProductInfo
-from pydantic import ValidationError
-from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, RetryCallState
 import json
 import re
+
+from base_llm import LLMBaseClient
+from pydantic import ValidationError
+from struct_schema_model import ProductInfo
+from tenacity import (
+    RetryCallState,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_fixed,
+)
 
 """
 Day4 整体目标
@@ -43,9 +50,11 @@ _SYSTEM_PROMPT = (
 MAX_RETRY_TIMES = 2
 RETRY_WAIT_SEC = 1
 
+
 def retry_log_callback(retry_state: RetryCallState):
     exc = retry_state.outcome.exception()
     print(f"【格式重试】第{retry_state.attempt_number}次重试，等待{RETRY_WAIT_SEC}s，异常：{exc}")
+
 
 # 自定义异常
 class JsonParseError(Exception):
@@ -55,6 +64,7 @@ class JsonParseError(Exception):
         self.raw_error = raw_err
         super().__init__(self.msg)
 
+
 class PydanticValidateError(Exception):
     def __init__(self, msg: str, validate_err: ValidationError):
         self.code = 422
@@ -62,14 +72,17 @@ class PydanticValidateError(Exception):
         self.validate_detail = validate_err.errors()
         super().__init__(self.msg)
 
+
 class LLMStructClient:
     """
-        请求 LLM 拿到原始字符串；
-        清洗去除 markdown、换行；
-        json.loads 解析，失败抛JsonParseError触发重试；
-        解析成功用 Pydantic 校验全字段；字段错抛PydanticValidateError触发重试；
-        重试耗尽直接报错；全部合法返回 Pydantic 对象，直接 .name/.price 取值。
+    prompt 强制要求返回json格式
+    请求 LLM 拿到原始(json)字符串；
+    清洗去除 markdown、换行；
+    json.loads 解析，失败抛JsonParseError触发重试；
+    解析成功用 Pydantic 校验全字段；字段错抛PydanticValidateError触发重试；
+    重试耗尽直接报错；全部合法返回 Pydantic 对象，直接 .name/.price 取值。
     """
+
     def __init__(self):
         self.system_prompt = _SYSTEM_PROMPT
 
@@ -89,7 +102,7 @@ class LLMStructClient:
         stop=stop_after_attempt(MAX_RETRY_TIMES),
         wait=wait_fixed(RETRY_WAIT_SEC),
         retry=retry_if_exception_type((JsonParseError, PydanticValidateError)),
-        before_sleep=retry_log_callback
+        before_sleep=retry_log_callback,
     )
     def struct_chat(self, prompt: str, schema_cls):
         """
@@ -122,11 +135,11 @@ class LLMStructClient:
 
         return model_obj
 
+
 if __name__ == "__main__":
     llmstructClient = LLMStructClient()
     res = llmstructClient.struct_chat(
-        prompt="新款无线蓝牙耳机，售价129，适合运动、通勤，音质清晰",
-        schema_cls=ProductInfo # 
+        prompt="新款无线蓝牙耳机，售价129，适合运动、通勤，音质清晰", schema_cls=ProductInfo  #
     )
     print(res)
     print(f"商品名：{res.name}，价格：{res.price}，标签：{res.tags}")

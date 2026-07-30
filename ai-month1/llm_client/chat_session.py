@@ -1,8 +1,9 @@
 import os
+from typing import Dict, Generator, List, Optional
+
 import requests
+from base_llm import LLMBaseClient
 from dotenv import load_dotenv
-from typing import List, Dict, Optional
-from llm_client.base_llm import LLMBaseClient
 
 
 class ChatSession:
@@ -34,12 +35,11 @@ class ChatSession:
     三, 踩过的坑
     一定要明确需求后再进行开发，否则代码会十分混乱，如每个实例 = 独立聊天窗口，隔离上下文。每个实例只需初始化一次即可，参考测试代码，后续设置init方法时要格外注意
     """
+
     def __init__(self, system_content: str, max_token_limit: int = 6000):
         # 禁止system为空，兜底默认角色
         self.system_content = system_content or "你是通用AI助手，回答简洁清晰"
-        self.messages: List[Dict[str, str]] = [
-            {"role": "system", "content": self.system_content}
-        ]
+        self.messages: List[Dict[str, str]] = [{"role": "system", "content": self.system_content}]
         self.max_token_limit = max_token_limit
 
     def _add_user_msg(self, content: str):
@@ -101,14 +101,10 @@ class ChatSession:
         self.messages = [{"role": "system", "content": new_system}]
 
     def get_all_messages(self) -> List[Dict[str, str]]:
-        return self.messages.copy()
+        return self.messages.copy()  # 防止外部修改 messages
 
     def chat(
-        self,
-        user_input: str,
-        llm: LLMBaseClient,
-        timeout: Optional[int] = None,
-        temperature: float = 0.7
+        self, user_input: str, llm: LLMBaseClient, timeout: Optional[int] = None, temperature: float = 0.7
     ) -> Dict:
         """
         会话主聊天方法
@@ -121,11 +117,7 @@ class ChatSession:
         self._cut_history_auto()
 
         # 不传timeout则使用LLM自带全局超时
-        resp = llm.chat_with_messages(
-            messages=self.messages,
-            timeout=timeout,
-            temperature=temperature
-        )
+        resp = llm.chat_with_messages(messages=self.messages, timeout=timeout, temperature=temperature)
 
         if resp["status"] == "success":
             self._add_assistant_msg(resp["content"])
@@ -134,15 +126,57 @@ class ChatSession:
             self.messages.pop()
         return resp
 
+    def chat_stream(
+        self,
+        user_input: str,
+        llm: LLMBaseClient,
+        timeout: Optional[int] = None,
+        temperature: float = 0.7,
+    ) -> Generator[str, None, None]:
+        """
+        流式输出，迭代生成器实时拿分片；迭代结束后读取self.stream_last_full_text获取完整回答，避免return与生成器冲突
+        调用示例：
+        llm = LLMBaseClient()
+        session = ChatSession(system_content="你叫小助手，记住用户信息", max_token_limit=4000)
+        full_answer = ""
+        print("AI：", end="", flush=True)
+        stream_gen = session.chat_stream(user_input="我叫张三", llm=llm)
+        for chunk in stream_gen:
+            print(chunk, flush=True)
+            full_answer += chunk
+        print(f"\n流式拼接完整结果：{full_answer}")
+        """
+        self._add_user_msg(user_input)
+        self._cut_history_auto()
+        full_text = ""
+
+        try:
+            resp_generator = llm.chat_stream_messages(messages=self.messages, timeout=timeout, temperature=temperature)
+            for word in resp_generator:
+                full_text += word
+                yield word
+            # 正常结束入库
+            self._add_assistant_msg(full_text)
+        except Exception as e:
+            print(f"流式异常：{repr(e)}，回滚用户消息")
+            self.messages.pop()
+            return
+
 
 if __name__ == "__main__":
     # 测试代码
     llm = LLMBaseClient()
     session = ChatSession(system_content="你叫小助手，记住用户信息", max_token_limit=4000)
-    res = session.chat(user_input="我叫张三", llm=llm)
-    print(res["content"])
+    full_answer = ""
+    print("AI：", end="", flush=True)
+    stream_gen = session.chat_stream(user_input="我叫张三", llm=llm)
+    for chunk in stream_gen:
+        print(chunk, flush=True)
+        full_answer += chunk
+    print(f"\n流式拼接完整结果：{full_answer}")
+
     res2 = session.chat(user_input="我叫什么名字", llm=llm)
-    print(res2["content"])
     print("完整消息列表", session.get_all_messages())
+
     # 手动清空历史
     session.clear_history()

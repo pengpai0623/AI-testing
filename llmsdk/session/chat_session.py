@@ -1,9 +1,13 @@
-import os
 from typing import Dict, Generator, List, Optional
 
-import requests
-from base_llm import LLMBaseClient
-from dotenv import load_dotenv
+from llmsdk.client.base_llm import LLMBaseClient
+from llmsdk.utils.constants import (
+    CHINESE_TOKEN_RATIO,
+    CUT_PAIR_PER_TIME,
+    DEFAULT_MAX_TOKEN,
+    DEFAULT_TEMPERATURE,
+    MIN_KEEP_MSG_NUM,
+)
 
 
 class ChatSession:
@@ -36,7 +40,7 @@ class ChatSession:
     一定要明确需求后再进行开发，否则代码会十分混乱，如每个实例 = 独立聊天窗口，隔离上下文。每个实例只需初始化一次即可，参考测试代码，后续设置init方法时要格外注意
     """
 
-    def __init__(self, system_content: str, max_token_limit: int = 6000):
+    def __init__(self, system_content: str = "", max_token_limit=DEFAULT_MAX_TOKEN):
         # 禁止system为空，兜底默认角色
         self.system_content = system_content or "你是通用AI助手，回答简洁清晰"
         self.messages: List[Dict[str, str]] = [{"role": "system", "content": self.system_content}]
@@ -55,7 +59,7 @@ class ChatSession:
         total_tokens = 0.0
         for chat_mes in messages:
             content = chat_mes["content"]
-            current_chat_tokens = len(content) * 1.5
+            current_chat_tokens = len(content) * CHINESE_TOKEN_RATIO
             total_tokens += current_chat_tokens
         print(f"[Token统计] 当前总预估token：{total_tokens:.1f}")
         return total_tokens
@@ -83,13 +87,13 @@ class ChatSession:
                 break
 
             # 只剩system+1对对话，不再裁剪兜底
-            if len(self.messages) <= 3:
+            if len(self.messages) <= MIN_KEEP_MSG_NUM:
                 print("对话只剩最少一轮，停止裁剪避免无上下文")
                 break
 
             print(f"Token超限{current_tokens:.1f}/{self.max_token_limit}，删除最早1轮对话")
             # 必须赋值覆盖
-            self.messages = self._del_history_content(del_pair_num=1)
+            self.messages = self._del_history_content(del_pair_num=CUT_PAIR_PER_TIME)
 
     def clear_history(self):
         """对外公共方法：清空所有聊天，保留system"""

@@ -28,7 +28,10 @@ class LLMBaseClient:
         self.model_name = DOUBAO_MODEL
         self.timeout = REQUEST_TIMEOUT
 
-        self.headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
 
     def _request_stream_messages(
         self,
@@ -36,24 +39,6 @@ class LLMBaseClient:
         timeout: int,
         temperature: float,
     ) -> Generator[str, None, None]:
-        """
-        流式 SSE（Server-Sent Events 服务端推送事件）
-        和 websocket 简单区分
-        SSE：HTTP 协议，服务端单向发消息，适合大模型流式，简单轻量；
-        WebSocket：双向收发，适合企微实时聊天收发消息。
-
-        大模型一边生成文字，一边把内容切成无数小分片（chunk）实时推送。
-        浏览器、客户端持续长连接接收数据，不用等全部结束。
-        传输协议：HTTP 长连接，服务端单向不断发数据，客户端只收不发；
-        大模型流式本质：遵循 SSE 规范，一行一条data: {json分片}\n\n；
-        终止标志：最后会返回data: [DONE]代表流式结束。
-
-        流式输出实例
-        data: {"choices":[{"delta":{"content":"你"}}]}
-        data: {"choices":[{"delta":{}}]} # 有可能为空行
-        data: {"choices":[{"delta":{"content":"好"}}]}
-        data: [DONE]
-        """
         if not isinstance(messages, list) or len(messages) == 0:
             raise ValueError("messages不能为空列表")
 
@@ -61,16 +46,18 @@ class LLMBaseClient:
             "model": self.model_name,
             "temperature": temperature,
             "messages": messages,
-            "stream": True,  # 以 SSE 多行data:xxx分片持续推送内容
+            "stream": True,
+            "stream_options": {"include_usage": True},
         }
 
+        resp = None  # 初始化，避免异常处理中未定义
         try:
             resp = requests.post(
                 url=self.endpoint,
                 headers=self.headers,
                 json=request_body,
                 timeout=timeout,
-                stream=True,  # requests流式开关
+                stream=True,
             )
             resp.raise_for_status()
         except requests.exceptions.Timeout as e:
@@ -78,20 +65,13 @@ class LLMBaseClient:
         except requests.exceptions.ConnectionError as e:
             raise LLMNetworkError(f"流式连接失败：{e}")
         except requests.exceptions.HTTPError as e:
-            code = resp.status_code if "resp" in locals() else 0
+            code = resp.status_code if resp is not None else 0
             raise LLMHttpError(f"流式HTTP异常 {code}: {e}")
 
-        for raw_line in resp.iter_lines():  # 按行流式读取响应，不会一次性加载全部响应到内存；
-            """
-            长连接持续接收服务端源源不断的字节流；
-            内部不断缓存字节，碰到换行符就切出一行，以 bytes 抛出给循环；
-            没有完整一行时继续阻塞等待网络数据，不会提前返回；
-            只处理以data:开头的有效行，其他注释、心跳行全部丢弃；
-            传输结束（收到[DONE]、连接关闭），循环正常终止。
-            """
+        for raw_line in resp.iter_lines():
             if not raw_line:
                 continue
-            line = raw_line.decode("utf-8")  # 强制utf8解码
+            line = raw_line.decode("utf-8")
             if not line or not line.startswith("data:"):
                 continue
 
@@ -99,13 +79,17 @@ class LLMBaseClient:
             data_str = data_str.strip()
             if data_str == "[DONE]":
                 break
+
             try:
                 chunk = json.loads(data_str)
+            except json.JSONDecodeError as e:  # 修复：添加 as e
+                raise LLMSSEParseError(f"SSE JSON解析失败：{e}")
+
+            # 关键修复：防御性检查
+            if "choices" in chunk and chunk["choices"] and "delta" in chunk["choices"][0]:
                 delta = chunk["choices"][0]["delta"].get("content", "")
                 if delta:
                     yield delta
-            except json.JSONDecodeError:
-                raise LLMSSEParseError(f"SSE JSON解析失败：{e}")
 
     @retry(
         stop=stop_after_attempt(MAX_RETRY_TIMES),
@@ -126,7 +110,12 @@ class LLMBaseClient:
         }
 
         try:
-            resp = requests.post(url=self.endpoint, headers=self.headers, json=request_body, timeout=timeout)
+            resp = requests.post(
+                url=self.endpoint,
+                headers=self.headers,
+                json=request_body,
+                timeout=timeout,
+            )
             resp.raise_for_status()  # 非2xx抛出HTTPError
             resp_data = resp.json()
 
@@ -151,16 +140,26 @@ class LLMBaseClient:
             if status_code == 429:
                 return {"status": "limit_429", "content": "接口限流"}
             elif status_code in [400, 401, 403]:
-                return {"status": "http_err", "content": f"{status_code} 权限/参数错误：{resp_text}"}
+                return {
+                    "status": "http_err",
+                    "content": f"{status_code} 权限/参数错误：{resp_text}",
+                }
             elif status_code in [502, 503]:
                 raise ConnectionError("服务临时故障，触发重试")
             else:
-                return {"status": "http_err", "content": f"{status_code} {str(http_err)}"}
+                return {
+                    "status": "http_err",
+                    "content": f"{status_code} {str(http_err)}",
+                }
         except Exception as e:
             return {"status": "unknown_err", "content": f"未知异常：{str(e)}"}
 
     def chat_single(
-        self, prompt: str, timeout: Optional[int] = None, temperature: float = 0.7, system_prompt: Optional[str] = None
+        self,
+        prompt: str,
+        timeout: Optional[int] = None,
+        temperature: float = 0.7,
+        system_prompt: Optional[str] = None,
     ) -> Dict:
         """
         兼容Day1老接口：单轮对话，自动拼装OpenAI messages
@@ -182,7 +181,10 @@ class LLMBaseClient:
         return self._request_messages(messages, use_timeout, temperature)
 
     def chat_with_messages(
-        self, messages: List[Dict[str, str]], timeout: Optional[int] = None, temperature: float = 0.7
+        self,
+        messages: List[Dict[str, str]],
+        timeout: Optional[int] = None,
+        temperature: float = 0.7,
     ) -> Dict:
         """
         多轮对话入口：外部直接传入完整OpenAI格式messages数组

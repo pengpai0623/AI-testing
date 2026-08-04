@@ -1,5 +1,7 @@
 from typing import Dict, Generator, List, Optional
 
+import tiktoken
+
 from llmsdk.client.base_llm import LLMBaseClient
 from llmsdk.utils.constants import (
     CHINESE_TOKEN_RATIO,
@@ -54,50 +56,81 @@ class ChatSession:
         """追加AI返回内容"""
         self.messages.append({"role": "assistant", "content": content})
 
-    def estimate_total_token(self, messages: List[Dict[str, str]]) -> float:
-        """根据当前 messages 整体预估 token，中文1.5token/汉字"""
-        total_tokens = 0.0
-        for chat_mes in messages:
-            content = chat_mes["content"]
-            current_chat_tokens = len(content) * CHINESE_TOKEN_RATIO
-            total_tokens += current_chat_tokens
-        print(f"[Token统计] 当前总预估token：{total_tokens:.1f}")
-        return total_tokens
+    def count_tokens_for_messages(self, messages: List[Dict[str, str]], model: str = "gpt-4o") -> int:
+        """
+        计算 messages 列表的 prompt token（包括AI回答消耗） 数量（包含格式开销）。
+        这个计算结果与 API 响应的 usage.prompt_tokens 基本一致。
+        """
+        encoding = tiktoken.get_encoding("cl100k_base")
+        tokens_per_message = 3
+        tokens_per_name = 1  # 如果消息有 name 字段，额外加 1（一般不用）
+        num_tokens = 0
+        for message in messages:
+            num_tokens += tokens_per_message
+            for key, value in message.items():
+                num_tokens += len(encoding.encode(value))
+                if key == "name":
+                    num_tokens += tokens_per_name
+        num_tokens += 3  # 在 prompt 末尾附加的 assistant 引导标记
+        return num_tokens
 
-    def _del_history_content(self, del_pair_num: int):
-        """删除前面N对对话，返回新消息列表，带边界防护"""
-        system_msg = self.messages[0]
-        dialog_list = self.messages[1:]
-        need_cut_length = del_pair_num * 2
+    def trim_messages_for_context(
+        self,
+        messages: List[Dict[str, str]],
+        model_max_tokens: int,  # 模型最大上下文，例如 gpt-4o 为 128000
+        max_completion_tokens: int,  # 本次回答预留的最大 token 数
+        model: str = "gpt-4o",  # 不需要，先保留
+        keep_system: bool = True,
+    ) -> List[Dict[str, str]]:
+        """
+        如果 prompt_tokens + max_completion_tokens 超过 model_max_tokens，
+        则从最前面开始删除非 system 的对话（保留 system 和最新对话），
+        直到满足限制。返回截断后的 messages 列表。
+        """
+        # 1. 分离 system 消息和普通对话
+        system_messages = []
+        chat_messages = []
+        for msg in messages:
+            if keep_system and msg.get("role") == "system":
+                system_messages.append(msg)
+            else:
+                chat_messages.append(msg)
 
-        # 对话条数不足，不删除
-        if len(dialog_list) < need_cut_length:
-            print("对话数量不足，无法继续裁剪")
-            return self.messages
+        # 2. 计算 system 的 token 数
+        system_tokens = self.count_tokens_for_messages(system_messages, model) if system_messages else 0
 
-        remain_dialog = dialog_list[need_cut_length:]
-        new_messages = [system_msg] + remain_dialog
-        return new_messages
+        # 3. 为 prompt 预留的最大 token 数（总上下文 - 预留的 completion）
+        available_for_prompt = model_max_tokens - max_completion_tokens
 
-    def _cut_history_auto(self):
-        """token超限自动裁剪，每次删最早1对，禁止删到只剩system"""
-        while True:
-            current_tokens = self.estimate_total_token(self.messages)
-            if current_tokens < self.max_token_limit:
-                break
+        if system_tokens > available_for_prompt:
+            raise ValueError(
+                f"System messages alone ({system_tokens} tokens) exceed the available prompt limit "
+                f"({available_for_prompt}) after reserving {max_completion_tokens} tokens for completion."
+            )
 
-            # 只剩system+1对对话，不再裁剪兜底
-            if len(self.messages) <= MIN_KEEP_MSG_NUM:
-                print("对话只剩最少一轮，停止裁剪避免无上下文")
-                break
+        # 4. 如果当前 chat 部分已经满足限制，直接返回原始 messages
+        chat_tokens = self.count_tokens_for_messages(chat_messages, model) if chat_messages else 0
 
-            print(f"Token超限{current_tokens:.1f}/{self.max_token_limit}，删除最早1轮对话")
-            # 必须赋值覆盖
-            self.messages = self._del_history_content(del_pair_num=CUT_PAIR_PER_TIME)
+        if chat_tokens <= available_for_prompt - system_tokens:
+            return messages
+
+        # 5. 需要截断：二分查找最小的起始索引，使得 chat_messages[start:] 的 token 数 <= 可用空间
+        left, right = 0, len(chat_messages)
+        while left < right:
+            mid = (left + right) // 2
+            remaining = chat_messages[mid:]
+            remaining_tokens = self.count_tokens_for_messages(remaining, model)
+            if remaining_tokens <= available_for_prompt - system_tokens:
+                right = mid
+            else:
+                left = mid + 1
+
+        trimmed_chat = chat_messages[left:]
+        return system_messages + trimmed_chat
 
     def clear_history(self):
         """对外公共方法：清空所有聊天，保留system"""
-        self.messages = self.messages[:1]
+        self.messages = [msg for msg in self.messages if msg.get("role") == "system"]
 
     def reset_system(self, new_system: str):
         """更换system角色，全量清空历史"""
@@ -108,7 +141,12 @@ class ChatSession:
         return self.messages.copy()  # 防止外部修改 messages
 
     def chat(
-        self, user_input: str, llm: LLMBaseClient, timeout: Optional[int] = None, temperature: float = 0.7
+        self,
+        user_input: str,
+        llm: LLMBaseClient,
+        timeout: Optional[int] = None,
+        max_completion_tokens: int = 300,
+        temperature: float = 0.7,
     ) -> Dict:
         """
         会话主聊天方法
@@ -118,7 +156,11 @@ class ChatSession:
         :param temperature: 随机性
         """
         self._add_user_msg(user_input)
-        self._cut_history_auto()
+        self.messages = self.trim_messages_for_context(
+            self.messages,
+            model_max_tokens=self.max_token_limit,
+            max_completion_tokens=max_completion_tokens,
+        )
 
         # 不传timeout则使用LLM自带全局超时
         resp = llm.chat_with_messages(messages=self.messages, timeout=timeout, temperature=temperature)
@@ -135,6 +177,7 @@ class ChatSession:
         user_input: str,
         llm: LLMBaseClient,
         timeout: Optional[int] = None,
+        max_completion_tokens: int = 300,
         temperature: float = 0.7,
     ) -> Generator[str, None, None]:
         """
@@ -151,7 +194,12 @@ class ChatSession:
         print(f"\n流式拼接完整结果：{full_answer}")
         """
         self._add_user_msg(user_input)
-        self._cut_history_auto()
+        self.messages = self.trim_messages_for_context(
+            self.messages,
+            model_max_tokens=self.max_token_limit,
+            max_completion_tokens=max_completion_tokens,
+        )
+
         full_text = ""
 
         try:

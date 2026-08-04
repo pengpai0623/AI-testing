@@ -82,10 +82,9 @@ class LLMBaseClient:
 
             try:
                 chunk = json.loads(data_str)
-            except json.JSONDecodeError as e:  # 修复：添加 as e
+            except json.JSONDecodeError as e:
                 raise LLMSSEParseError(f"SSE JSON解析失败：{e}")
 
-            # 关键修复：防御性检查
             if "choices" in chunk and chunk["choices"] and "delta" in chunk["choices"][0]:
                 delta = chunk["choices"][0]["delta"].get("content", "")
                 if delta:

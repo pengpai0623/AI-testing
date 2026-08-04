@@ -10,6 +10,7 @@ from llmsdk.utils.constants import (
     DEFAULT_TEMPERATURE,
     MIN_KEEP_MSG_NUM,
 )
+from llmsdk.utils.logger import logger
 
 
 class ChatSession:
@@ -111,6 +112,9 @@ class ChatSession:
         # 4. 如果当前 chat 部分已经满足限制，直接返回原始 messages
         chat_tokens = self.count_tokens_for_messages(chat_messages, model) if chat_messages else 0
 
+        prompt_token = chat_tokens + system_tokens
+        remaining_tokes = available_for_prompt - prompt_token
+        logger.info(f"当前messases prompt_token为{prompt_token}, 当前上下文剩余可用token为{remaining_tokes}")
         if chat_tokens <= available_for_prompt - system_tokens:
             return messages
 

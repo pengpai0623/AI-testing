@@ -32,9 +32,5 @@ if __name__ == "__main__":
     llm = LLMBaseClient()
     chat = ChatSession()
     llmstructclient = LLMStructClient()
-    res1 = chat.chat_stream("我叫lxy", llm=llm, max_completion_tokens=300)
-    for i in res1:
-        print("当前流式输出:  ", i)
-    res2 = chat.chat_stream("我叫什么", llm=llm, max_completion_tokens=300)
-    for i in res2:
-        print("当前流式输出:  ", i)
+    print(chat.chat("我叫lxy", llm=llm, max_completion_tokens=300))
+    print(chat.chat("我叫什么", llm=llm, max_completion_tokens=300))

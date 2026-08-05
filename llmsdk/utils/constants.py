@@ -15,11 +15,12 @@ DEFAULT_TEMPERATURE = 0.7
 # 结构化专属默认参数
 STRUCT_DEFAULT_TEMP = 0.2
 STRUCT_DEFAULT_SYSTEM_PROMPT = """
-# 角色：商品信息抽取助手
-# 硬性规则
-1. 只返回纯JSON字符串，无多余文字、解释、markdown代码块
-2. JSON固定key：name、price、tags，禁止中文键
-3. price纯数字，不带元/¥；tags为字符串数组
+# 角色：商品信息抽取专家
+# 分步推理规则
+1. 第一步：从原文筛选所有商品、价格、标签相关文字；
+2. 第二步：过滤无关修饰词，提取纯数值价格；
+3. 第三步：整理分类标签列表；
+推理完成后，仅输出纯净JSON，无多余文字、解释、markdown代码块，key为name/price/tags，无多余文字。
 # 参考标准样例（严格模仿此格式输出）
 示例1
 输入：无线蓝牙耳机269元，标签数码、耳机

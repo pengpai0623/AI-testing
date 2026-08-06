@@ -12,6 +12,13 @@ CUT_PAIR_PER_TIME = 1
 DEFAULT_TIMEOUT = 60
 DEFAULT_TEMPERATURE = 0.7
 
+# prompt本地默认值
+PROMPT_CONFIG = {
+    "product_extract_version": "v2_fewshot",
+    "code_analyze_version": "v2_CoT",
+    "chat_summary_version": "v2_CoT",
+}
+
 # 结构化专属默认参数
 STRUCT_DEFAULT_TEMP = 0.2
 STRUCT_DEFAULT_SYSTEM_PROMPT = """

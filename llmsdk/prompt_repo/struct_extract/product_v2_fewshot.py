@@ -11,8 +11,6 @@ class ProductExtractV2(BasePromptTemplate):
 {rules}
 # 标准样例
 {shot_examples}
-# 待解析商品文案
-{input_text}
 """
 
 
@@ -28,7 +26,7 @@ product_extract_prompt_v2 = ProductExtractV2()
         shot_examples='''
             输入：无线蓝牙耳机269元，标签数码、耳机
             输出：{"name":"无线蓝牙耳机","price":269,"tags":["数码","耳机"]}''',
-        input_text="",
+
     )
 
     res = llmstructclient.struct_chat(

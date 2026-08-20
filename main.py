@@ -1,32 +1,23 @@
-from enum import Enum
-from typing import List, Optional
+import asyncio
+import threading
 
-from pydantic import BaseModel, Field
-
-
-class MsgRole(str, Enum):
-    user = "user"
-    assistant = "assistant"
-    system = "system"
+# 1. 这是进程（运行这个脚本本身）
 
 
-class MessageItem(BaseModel):
-    """单条消息"""
+async def my_coroutine(name):
+    # 3. 协程执行在这里 —— 它依附于下面的主线程
+    print(f"协程 {name} 正在运行，所在的线程ID: {threading.get_ident()}")
+    await asyncio.sleep(1)
+    return "完成"
 
-    role: MsgRole = Field(..., description="角色：user / assistant / system")
-    content: str = Field(..., min_length=1, description="消息内容")
+
+async def main():
+    # 2. 这是进程里的主线程，启动了数以万计的协程
+    # 这里只有一个线程，但创建了 5 个协程“影分身”
+    tasks = [my_coroutine(i) for i in range(5)]
+    await asyncio.gather(*tasks)
 
 
-session_store = [
-    {"role": "system", "content": "专业记名字大师"},
-    {"role": "user", "content": "我叫lxy"},
-    {
-        "role": "assistant",
-        "content": "哈喽lxy呀😉 这个拼音首字母缩写好有专属感，是你大名的缩写对不对？好奇背后藏着什么 好听的名字~\n\n不管你是今天想分享刚碰到的开心小事、吐槽遇到的糟心情况，还是需要帮忙整理资料、想创意点子、唠各种奇奇怪怪的脑洞话题，我都随时陪你聊哦~",
-    },
-    {"role": "user", "content": "我叫什么来着"},
-]
-valid_messages = [MessageItem(**item).model_dump() for item in session_store]
-
-for item in session_store:
-    print(MessageItem(**item).model_dump())
+if __name__ == "__main__":
+    # 启动：1个进程 -> 1个主线程 -> 异步运行多个协程
+    asyncio.run(main())

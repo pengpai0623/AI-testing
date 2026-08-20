@@ -214,7 +214,7 @@ class ChatSession:
             # 正常结束入库
             self._add_assistant_msg(full_text)
         except Exception as e:
-            print(f"流式异常：{repr(e)}，回滚用户消息")
+            logger.error(f"流式异常：{repr(e)}，回滚用户消息")
             self.messages.pop()
             return
 

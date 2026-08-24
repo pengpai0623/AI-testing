@@ -1,21 +1,34 @@
-# logger.py
 import logging
 import sys
+from typing import Optional
 
-root_logger = logging.getLogger()
-root_logger.handlers.clear()
 
-root_logger.setLevel(logging.INFO)
+def setup_logger():
+    app_log = logging.getLogger("llm_sdk")
+    # 防止重复添加handler（多次import不会重复打印）
+    if app_log.handlers:
+        return app_log
 
-console_handler = logging.StreamHandler(sys.stdout)  # 或 sys.stderr，通常用 stdout
-console_handler.setLevel(logging.INFO)  # 与 root 一致
+    app_log.setLevel(logging.INFO)
+    app_log.propagate = False
 
-formatter = logging.Formatter(
-    fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-console_handler.setFormatter(formatter)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
 
-root_logger.addHandler(console_handler)
+    formatter = logging.Formatter(
+        fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    console_handler.setFormatter(formatter)
+    app_log.addHandler(console_handler)
 
-logger = root_logger
+    # 如果需要文件日志，可以追加FileHandler
+    # from logging.handlers import RotatingFileHandler
+    # file_handler = RotatingFileHandler("app.log", maxBytes=10*1024*1024, backupCount=5, encoding="utf‑8")
+    # file_handler.setFormatter(formatter)
+    # app_log.addHandler(file_handler)
+
+    return app_log
+
+
+logger = setup_logger()

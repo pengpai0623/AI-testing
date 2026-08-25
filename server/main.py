@@ -1,9 +1,14 @@
 import time
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from llmsdk.schemas.common_resp import ApiResponse
 from llmsdk.utils import logger
+from llmsdk.utils.constants import CODE_OK, CODE_SERVER_ERROR, CODE_VALIDATE_ERROR
+from llmsdk.utils.exceptions import LLMBaseError, LLMSSEParseError
 from server.routers import chat_router
 
 
@@ -40,6 +45,37 @@ app = FastAPI(
     description="基于 FastAPI + llmsdk 的大模型接口服务",
     version="1.0.0",
 )
+
+
+# 1.捕获Pydantic请求校验异常（422）
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning("请求参数校验失败", exc_info=exc)
+    return JSONResponse(
+        content=ApiResponse(code=CODE_VALIDATE_ERROR, msg=f"参数校验错误:{exc.errors()}", data=None).model_dump(),
+        status_code=200,  # 业务通过code区分，http状态码统一200；也可以保留422看团队规范
+    )
+
+
+# 2.捕获自定义业务异常
+@app.exception_handler(LLMBaseError)
+async def biz_exception_handler(request: Request, exc: LLMBaseError):
+    logger.error(f"业务异常 code={exc.code}, msg={exc.msg}", exc_info=exc)
+    return JSONResponse(
+        content=ApiResponse(code=exc.code, msg=exc.msg, data=None).model_dump(),
+        status_code=200,
+    )
+
+
+# 3.兜底捕获全部未处理Exception（500未知错误）
+@app.exception_handler(Exception)
+async def global_unknown_exception_handler(request: Request, exc: Exception):
+    logger.exception("服务器未知异常")
+    return JSONResponse(
+        content=ApiResponse(code=CODE_SERVER_ERROR, msg="服务器内部错误，请联系管理员", data=None).model_dump(),
+        status_code=200,
+    )
+
 
 # ✅全局注册中间件
 app.add_middleware(RequestLogMiddleware)

@@ -8,18 +8,14 @@ from llmsdk.client.base_llm import LLMBaseClient
 from llmsdk.utils.common import struct_retry_log
 from llmsdk.utils.constants import (
     DEFAULT_TIMEOUT,
+    ERR_JSON_PARSE,
+    ERR_PYDANTIC_VALIDATE,
     MAX_RETRY_TIMES,
     RETRY_WAIT_SEC,
     STRUCT_DEFAULT_SYSTEM_PROMPT,
     STRUCT_DEFAULT_TEMP,
 )
-from llmsdk.utils.exceptions import (
-    JsonParseError,
-    LLMBaseError,
-    LLMHttpError,
-    LLMNetworkError,
-    PydanticValidateError,
-)
+from llmsdk.utils.exceptions import JsonParseError, LLMBaseError, PydanticValidateError
 from llmsdk.utils.text_utils import clean_ai_json
 
 """
@@ -28,6 +24,10 @@ Day4 结构化能力封装
 Pydantic做字段强校验，格式/类型/字段错误自动重试；
 适配llmsdk统一配置、统一异常、统一重试参数；
 完全复用LLMBaseClient底层网络/鉴权配置。
+
+注意：
+- 仅【JSON解析失败、Pydantic字段校验失败】会触发重试；
+- 网络异常、鉴权错误、请求参数错误(LLMBaseError子类)直接向上抛出，**不会重试**，交给上层捕获处理。
 
 适用场景：需要程序自动读取AI返回数据（表单提取、商品信息、结构化入库、参数抽取）
 """
@@ -60,6 +60,9 @@ class LLMStructClient:
         :param timeout: 单次请求超时，不传使用全局默认
         :param temperature: 结构化建议调低随机性，默认0.2
         :return: 实例化后的Pydantic对象
+        :raises JsonParseError: AI输出无法解析为JSON，触发重试
+        :raises PydanticValidateError: 字段缺失/类型不匹配，触发重试
+        :raises LLMBaseError: 网络、鉴权、参数错误，不重试，直接向外抛出
         """
         # 优先级：单次传参 > 实例初始化 > 全局常量
         final_system = system_prompt if system_prompt is not None else self.default_system
@@ -73,25 +76,17 @@ class LLMStructClient:
             system_prompt=final_system,
         )
 
-        # 区分异常类型抛出
-        if llm_resp["status"] != "success":
-            err_msg = llm_resp["content"]
-            match llm_resp["status"]:
-                case "timeout" | "conn_error":
-                    raise LLMNetworkError(f"结构化请求网络异常：{err_msg}")
-                case "limit_429" | "http_err":
-                    raise LLMHttpError(f"结构化接口异常：{err_msg}")
-                case _:
-                    raise LLMBaseError(f"模型调用失败：{err_msg}")
+        raw_content = llm_resp.get("content", "")
+        if not raw_content:
+            raise JsonParseError(code=ERR_JSON_PARSE, msg="AI返回内容为空，无法解析JSON")
 
-        raw_content = llm_resp["content"]
         clean_json_str = clean_ai_json(raw_content)
 
         # JSON解析
         try:
             json_data = json.loads(clean_json_str)
         except json.JSONDecodeError as e:
-            raise JsonParseError(f"JSON解析失败，清洗后文本：{clean_json_str}") from e
+            raise JsonParseError(code=ERR_JSON_PARSE, msg=f"JSON解析失败：{str(e)}") from e
 
         # Pydantic优化报错文案
         try:
@@ -100,4 +95,7 @@ class LLMStructClient:
             err_detail = e.errors()[0]
             field = err_detail.get("loc", "未知字段")
             msg = err_detail.get("msg", "校验失败")
-            raise PydanticValidateError(f"字段校验失败：字段{field}，原因：{msg}") from e
+            raise PydanticValidateError(
+                code=ERR_PYDANTIC_VALIDATE,
+                msg=f"字段校验失败：字段{field}，原因：{msg}",
+            ) from e

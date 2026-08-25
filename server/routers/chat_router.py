@@ -4,7 +4,10 @@ from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from llmsdk.client.base_llm import LLMBaseClient
+from llmsdk.schemas.common_resp import ApiResponse
 from llmsdk.utils import logger
+from llmsdk.utils.constants import CODE_OK, ERR_LLM_HTTP, ERR_MSG_VALIDATE
+from llmsdk.utils.exceptions import LLMHttpError, MessageValidateError
 from server.models.chat_models import (
     MessageItem,
     SessionChatRequest,
@@ -22,7 +25,7 @@ session_store: dict[str, list] = {}
 
 
 # ========== 接口1：普通单轮问答 ==========
-@router.post("/single", response_model=SingleChatResponse, summary="单轮问答")
+@router.post("/single", summary="单轮问答")
 def chat_single(req: SingleChatRequest):
     """
     单轮问答接口，每次请求独立，不保留上下文
@@ -31,33 +34,27 @@ def chat_single(req: SingleChatRequest):
     - temperature: 模型温度参数（可选）
     """
     logger.info(f"[chat/single] 收到请求, temperature={req.temperature}, prompt_len={len(req.prompt)}")
-    try:
-        logger.info("[chat/single] 开始调用llm_client.chat_single")
-        result = llm_client.chat_single(
-            prompt=req.prompt,
-            system_prompt=req.system_prompt,
-            temperature=req.temperature,
-        )
-        logger.info(f"[chat/single] LLM返回完成，answer_len={len(result)}")
+    logger.info("[chat/single] 开始调用llm_client.chat_single")
 
-        resp = SingleChatResponse(
-            code=0,
-            message="success",
-            data={
-                "answer": result,
-                "prompt_tokens": len(req.prompt),
-            },
-        )
-        logger.info("[chat/single] 接口处理完毕，准备返回")
-        return resp
+    result = llm_client.chat_single(
+        prompt=req.prompt,
+        system_prompt=req.system_prompt,
+        temperature=req.temperature,
+    )
+    logger.info(f"[chat/single] LLM返回完成，answer_len={len(result['content'])}")
 
-    except Exception as e:
-        logger.exception(f"[chat/single] LLM调用异常 err={repr(e)}")
-        raise HTTPException(status_code=500, detail=f"LLM调用失败: {str(e)}")
+    resp = SingleChatResponse(
+        answer=result["content"],
+        prompt_tokens=result["prompt_tokens"],
+        completion_tokens=result["completion_tokens"],
+        total_tokens=result["total_tokens"],
+    )
+    logger.info("[chat/single] 接口处理完毕，准备返回")
+    return ApiResponse(code=CODE_OK, msg="ok", data=resp)
 
 
 # ========== 接口2：同步多轮对话（requests） ==========
-@router.post("/session", response_model=SessionChatResponse, summary="同步多轮对话")
+@router.post("/session", summary="同步多轮对话")
 def chat_session(req: SessionChatRequest):
     """
     多轮对话接口，session_id维护上下文
@@ -83,37 +80,34 @@ def chat_session(req: SessionChatRequest):
         logger.info(f"[chat/session] session={session_id} 消息校验通过，待发送消息条数:{len(valid_messages)}")
     except Exception as e:
         logger.exception(f"[chat/session] session={session_id} 消息校验失败 err={repr(e)}")
-        raise HTTPException(status_code=400, detail=f"消息格式非法: {e}")
+        raise MessageValidateError(code=ERR_MSG_VALIDATE, msg=f"消息格式非法: {str(e)}") from e
 
-    try:
-        logger.info(f"[chat/session] session={session_id} 开始调用大模型 chat_with_messages")
-        answer = llm_client.chat_with_messages(messages=valid_messages, temperature=req.temperature)
-        logger.info(f"[chat/session] session={session_id} 大模型调用完成")
-    except Exception as e:
-        logger.exception(f"[chat/session] session={session_id} LLM调用异常 err={repr(e)}")
-        raise HTTPException(status_code=500, detail=f"LLM调用失败: {str(e)}")
+    logger.info(f"[chat/session] session={session_id} 开始调用大模型 chat_with_messages")
+    answer = llm_client.chat_with_messages(messages=valid_messages, temperature=req.temperature)
+    logger.info(f"[chat/session] session={session_id} 大模型调用完成")
 
     content = answer.get("content")
     if not content:
         logger.error(f"[chat/session] session={session_id} 大模型返回content为空")
-        raise HTTPException(status_code=500, detail="大模型返回内容为空")
+        raise LLMHttpError(code=ERR_LLM_HTTP, msg="大模型返回内容为空")
 
+    # 调用成功才更新会话
     session_store[session_id] = temp_messages + [{"role": "assistant", "content": content}]
     logger.info(f"[chat/session] session={session_id} 会话已更新，总消息数={len(session_store[session_id])}")
 
-    return SessionChatResponse(
-        code=0,
-        message="success",
-        data={
-            "session_id": session_id,
-            "answer": answer,
-            "history_count": len(session_store[session_id]),
-        },
+    resp = SessionChatResponse(
+        session_id=session_id,
+        answer=content,
+        history_count=len(session_store[session_id]),
+        prompt_tokens=answer["prompt_tokens"],
+        completion_tokens=answer["completion_tokens"],
+        total_tokens=answer["total_tokens"],
     )
+    return ApiResponse(code=CODE_OK, msg="ok", data=resp)
 
 
 # ========== 接口3：异步多轮对话（httpx） ==========
-@router.post("/async_session", response_model=SessionChatResponse, summary="异步多轮对话")
+@router.post("/async_session", summary="异步多轮对话")
 async def async_chat_session(req: SessionChatRequest):
     """
     异步多轮对话接口，session_id维护上下文
@@ -136,33 +130,29 @@ async def async_chat_session(req: SessionChatRequest):
         logger.info(f"[chat/async_session] session={session_id} 消息校验通过，待发送消息条数:{len(valid_messages)}")
     except Exception as e:
         logger.exception(f"[chat/async_session] session={session_id} 消息校验失败 err={repr(e)}")
-        raise HTTPException(status_code=400, detail=f"消息格式非法: {e}")
+        raise MessageValidateError(code=ERR_MSG_VALIDATE, msg=f"消息格式非法: {str(e)}") from e
 
-    try:
-        logger.info(f"[chat/async_session] session={session_id} 开始调用 async_chat_with_messages")
-        answer = await llm_client.async_chat_with_messages(messages=valid_messages, temperature=req.temperature)
-        logger.info(f"[chat/async_session] session={session_id} 大模型异步调用完成")
-    except Exception as e:
-        logger.exception(f"[chat/async_session] session={session_id} LLM调用异常 err={repr(e)}")
-        raise HTTPException(status_code=500, detail=f"LLM调用失败: {str(e)}")
+    logger.info(f"[chat/async_session] session={session_id} 开始调用 async_chat_with_messages")
+    answer = await llm_client.async_chat_with_messages(messages=valid_messages, temperature=req.temperature)
+    logger.info(f"[chat/async_session] session={session_id} 大模型异步调用完成")
 
     content = answer.get("content")
     if not content:
         logger.error(f"[chat/async_session] session={session_id} 大模型返回content为空")
-        raise HTTPException(status_code=500, detail="大模型返回内容为空")
+        raise LLMHttpError(code=ERR_LLM_HTTP, msg="大模型返回内容为空")
 
     session_store[session_id] = temp_messages + [{"role": "assistant", "content": content}]
     logger.info(f"[chat/async_session] session={session_id} 会话更新完成，总消息数={len(session_store[session_id])}")
 
-    return SessionChatResponse(
-        code=0,
-        message="success",
-        data={
-            "session_id": session_id,
-            "answer": answer,
-            "history_count": len(session_store[session_id]),
-        },
+    resp = SessionChatResponse(
+        session_id=session_id,
+        answer=content,
+        history_count=len(session_store[session_id]),
+        prompt_tokens=answer["prompt_tokens"],
+        completion_tokens=answer["completion_tokens"],
+        total_tokens=answer["total_tokens"],
     )
+    return ApiResponse(code=CODE_OK, msg="ok", data=resp)
 
 
 # ========== 接口4：SSE流式（底层同步 requests） ==========

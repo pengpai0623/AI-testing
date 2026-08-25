@@ -1,7 +1,10 @@
 class LLMBaseError(Exception):
-    """SDK所有异常父类"""
+    """业务基础异常，SDK所有异常父类"""
 
-    pass
+    def __init__(self, code: int, msg: str):
+        self.code = code
+        self.msg = msg
+        super().__init__(msg)
 
 
 class EnvConfigError(LLMBaseError):
@@ -37,5 +40,23 @@ class JsonParseError(LLMBaseError):
 
 class PydanticValidateError(LLMBaseError):
     """Pydantic模型字段校验失败"""
+
+    pass
+
+
+class LLMValueError(LLMBaseError):
+    """业务数值非法、参数数值错误"""
+
+    pass
+
+
+class LLMConnectionError(LLMBaseError):
+    """业务层面连接异常"""
+
+    pass
+
+
+class MessageValidateError(LLMBaseError):
+    """内存组装的消息列表校验失败"""
 
     pass

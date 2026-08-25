@@ -38,3 +38,24 @@ STRUCT_DEFAULT_SYSTEM_PROMPT = """
 输出：{"name":"运动手环","price":99,"tags":["健身","睡眠监测"]}
 # 按上面样例格式处理用户输入
 """
+
+# Web接口统一返回码（ApiResponse 的 code）
+# 0/400/422/500：web 层 http 业务码
+CODE_OK = 0
+CODE_PARAM_ERROR = 400
+CODE_VALIDATE_ERROR = 422
+CODE_SERVER_ERROR = 500
+
+# SDK业务异常码 LLMBaseError子类
+# 1xxx：大模型底层链路类错误（网络、http、sse、配置）
+ERR_ENV_CONFIG = 1001  # EnvConfigError 配置/环境变量错误
+ERR_LLM_NETWORK = 1002  # LLMNetworkError 网络超时连接失败
+ERR_LLM_HTTP = 1003  # LLMHttpError 上游4xx/5xx
+ERR_SSE_PARSE = 1004  # LLMSSEParseError SSE分片解析失败
+
+# 4xxx：结构化输出解析类错误（json 解析、pydantic 校验、参数数值）
+ERR_JSON_PARSE = 4001  # JsonParseError json解析失败
+ERR_PYDANTIC_VALIDATE = 4002  # PydanticValidateError 字段校验失败
+ERR_VALUE = 4003  # LLMValueError 数值非法
+ERR_CONNECT = 4004  # LLMConnectionError 连接业务异常
+ERR_MSG_VALIDATE = 4005  # MessageValidateError 消息列表校验失败

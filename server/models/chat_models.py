@@ -15,11 +15,10 @@ class SingleChatRequest(BaseModel):
 
 
 class SingleChatResponse(BaseModel):
-    """单轮问答响应体"""
-
-    code: int = Field(0, description="状态码，0成功")
-    message: str = Field("success", description="状态描述")
-    data: dict = Field(..., description="返回数据")
+    answer: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
 
 
 # ========== 多轮对话 ==========
@@ -48,8 +47,9 @@ class SessionChatRequest(BaseModel):
 
 
 class SessionChatResponse(BaseModel):
-    """多轮对话响应体"""
-
-    code: int = 0
-    message: str = "success"
-    data: dict
+    session_id: str
+    answer: str
+    history_count: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int

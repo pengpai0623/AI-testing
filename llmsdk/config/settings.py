@@ -2,6 +2,7 @@ import os
 
 from dotenv import load_dotenv
 
+from llmsdk.utils.constants import ERR_ENV_CONFIG
 from llmsdk.utils.exceptions import EnvConfigError
 
 # 加载项目根目录.env
@@ -26,7 +27,7 @@ def check_config():
     if not DOUBAO_MODEL:
         missing.append("DOUBAO_MODEL")
     if missing:
-        raise EnvConfigError(f".env缺失必填配置：{','.join(missing)}")
+        raise EnvConfigError(code=ERR_ENV_CONFIG, msg=f".env缺失必填配置：{','.join(missing)}")
 
 
 # 初始化自动校验

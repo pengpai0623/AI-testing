@@ -4,7 +4,6 @@ from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from llmsdk.client.base_llm import LLMBaseClient
-from llmsdk.schemas.common_resp import ApiResponse
 from llmsdk.utils import logger
 from llmsdk.utils.constants import CODE_OK, ERR_LLM_HTTP, ERR_MSG_VALIDATE
 from llmsdk.utils.exceptions import LLMHttpError, MessageValidateError
@@ -15,6 +14,7 @@ from server.models.chat_models import (
     SingleChatRequest,
     SingleChatResponse,
 )
+from server.schemas.common_resp import ApiResponse
 
 router = APIRouter()
 

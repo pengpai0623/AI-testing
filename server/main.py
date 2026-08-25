@@ -5,11 +5,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from llmsdk.schemas.common_resp import ApiResponse
 from llmsdk.utils import logger
 from llmsdk.utils.constants import CODE_OK, CODE_SERVER_ERROR, CODE_VALIDATE_ERROR
 from llmsdk.utils.exceptions import LLMBaseError, LLMSSEParseError
 from server.routers import chat_router
+from server.schemas.common_resp import ApiResponse
 
 
 class RequestLogMiddleware(BaseHTTPMiddleware):

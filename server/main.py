@@ -57,7 +57,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# 2.捕获自定义业务异常
+# 2.捕获自定义业务异常 /LLMBaseError
 @app.exception_handler(LLMBaseError)
 async def biz_exception_handler(request: Request, exc: LLMBaseError):
     logger.error(f"业务异常 code={exc.code}, msg={exc.msg}", exc_info=exc)

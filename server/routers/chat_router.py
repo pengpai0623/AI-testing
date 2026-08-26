@@ -252,13 +252,15 @@ async def chat_session_stream_with_requests(req: SessionChatRequest):
         except LLMBaseError as exc:
             # 业务异常：LLMNetworkError / LLMHttpError / LLMValueError等
             err_data = json.dumps({"code": exc.code, "msg": exc.msg})
-            yield {"event": "error", "data": err_data}
+            yield {"event": "error", "data": err_data}  # 不会结束async for迭代，需要return终止
+            return
 
         except Exception as exc:
             # 兜底未知异常
             logger.exception(f"[chat/session_stream_requests] session={session_id} SSE生成异常 err={repr(exc)}")
             err_data = json.dumps({"code": 500, "msg": "流式服务内部未知错误"})
             yield {"event": "error", "data": err_data}
+            return
 
     return EventSourceResponse(stream_generator())
 
@@ -331,11 +333,13 @@ async def chat_session_stream_with_httpx(req: SessionChatRequest):
             # 业务异常：LLMNetworkError / LLMHttpError / LLMValueError等
             err_data = json.dumps({"code": exc.code, "msg": exc.msg})
             yield {"event": "error", "data": err_data}
+            return
 
         except Exception as exc:
             logger.exception(f"[chat/session_stream_httpx] session={session_id} SSE生成异常 err={repr(exc)}")
             err_data = json.dumps({"code": 500, "msg": "流式服务内部未知错误"})
             yield {"event": "error", "data": err_data}
+            return
 
     return EventSourceResponse(stream_generator())
 

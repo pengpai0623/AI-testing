@@ -77,6 +77,11 @@ def chat_session(req: SessionChatRequest):
     if not history and req.system_prompt:
         logger.info(f"[chat/session] session={session_id} 首次会话写入system_prompt")
         history.append({"role": "system", "content": req.system_prompt})
+    elif history and req.system_prompt:
+        # 会话已存在，忽略新传入system_prompt，本会话不支持动态更新system
+        logger.warning(
+            f"[chat/session_stream_httpx] session={session_id} 会话已存在，忽略传入的system_prompt，如需变更请使用新session_id"
+        )
 
     temp_messages = history + [{"role": "user", "content": req.prompt}]
     logger.info(f"[chat/session] session={session_id} 待校验消息总数={len(temp_messages)}")
@@ -127,6 +132,11 @@ async def async_chat_session(req: SessionChatRequest):
     if not history and req.system_prompt:
         logger.info(f"[chat/async_session] session={session_id} 首次会话写入system_prompt")
         history.append({"role": "system", "content": req.system_prompt})
+    elif history and req.system_prompt:
+        # 会话已存在，忽略新传入system_prompt，本会话不支持动态更新system
+        logger.warning(
+            f"[chat/session_stream_httpx] session={session_id} 会话已存在，忽略传入的system_prompt，如需变更请使用新session_id"
+        )
 
     temp_messages = history + [{"role": "user", "content": req.prompt}]
     logger.info(f"[chat/async_session] session={session_id} 待校验消息总数={len(temp_messages)}")
@@ -177,6 +187,11 @@ async def chat_session_stream_with_requests(req: SessionChatRequest):
     if not history and req.system_prompt:
         logger.info(f"[chat/session_stream_requests] session={session_id} 首次会话写入system_prompt")
         history.append({"role": "system", "content": req.system_prompt})
+    elif history and req.system_prompt:
+        # 会话已存在，忽略新传入system_prompt，本会话不支持动态更新system
+        logger.warning(
+            f"[chat/session_stream_httpx] session={session_id} 会话已存在，忽略传入的system_prompt，如需变更请使用新session_id"
+        )
 
     temp_messages = history + [{"role": "user", "content": req.prompt}]
     logger.info(f"[chat/session_stream_requests] session={session_id} 待校验消息总数={len(temp_messages)}")
@@ -263,6 +278,11 @@ async def chat_session_stream_with_httpx(req: SessionChatRequest):
     if not history and req.system_prompt:
         logger.info(f"[chat/session_stream_httpx] session={session_id} 首次会话写入system_prompt")
         history.append({"role": "system", "content": req.system_prompt})
+    elif history and req.system_prompt:
+        # 会话已存在，忽略新传入system_prompt，本会话不支持动态更新system
+        logger.warning(
+            f"[chat/session_stream_httpx] session={session_id} 会话已存在，忽略传入的system_prompt，如需变更请使用新session_id"
+        )
 
     temp_messages = history + [{"role": "user", "content": req.prompt}]
     logger.info(f"[chat/session_stream_httpx] session={session_id} 待校验消息总数={len(temp_messages)}")

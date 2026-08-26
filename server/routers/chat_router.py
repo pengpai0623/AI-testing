@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
@@ -6,7 +7,12 @@ from sse_starlette.sse import EventSourceResponse
 from llmsdk.client.base_llm import LLMBaseClient
 from llmsdk.utils import logger
 from llmsdk.utils.constants import CODE_OK, ERR_LLM_HTTP, ERR_MSG_VALIDATE
-from llmsdk.utils.exceptions import LLMHttpError, MessageValidateError
+from llmsdk.utils.exceptions import (
+    ClientDisconnectError,
+    LLMBaseError,
+    LLMHttpError,
+    MessageValidateError,
+)
 from server.models.chat_models import (
     MessageItem,
     SessionChatRequest,
@@ -182,7 +188,7 @@ async def chat_session_stream_with_requests(req: SessionChatRequest):
         )
     except Exception as e:
         logger.exception(f"[chat/session_stream_requests] session={session_id} 消息校验失败 err={repr(e)}")
-        raise HTTPException(status_code=400, detail=f"消息格式非法: {e}")
+        raise MessageValidateError(code=ERR_MSG_VALIDATE, msg=f"消息格式非法: {str(e)}") from e
 
     async def stream_generator():
         full_answer = ""
@@ -213,20 +219,31 @@ async def chat_session_stream_with_requests(req: SessionChatRequest):
                     full_answer += chunk
                     yield {"event": "message", "data": chunk}
 
+            # 完整正常结束，推送done并保存会话
             yield {"event": "done", "data": full_answer}
             logger.info(
                 f"[chat/session_stream_requests] session={session_id} 推送done事件，完整回答长度={len(full_answer)}"
             )
-
-        except Exception as exc:
-            logger.exception(f"[chat/session_stream_requests] session={session_id} SSE生成异常 err={repr(exc)}")
-            yield {"event": "error", "data": str(exc)}
-        finally:
             session_store[session_id] = temp_messages + [{"role": "assistant", "content": full_answer}]
             logger.info(
-                f"[chat/session_stream_requests] session {session_id} finally保存会话完成，"
-                f"历史条数 {len(session_store[session_id])}, answer_len={len(full_answer)}"
+                f"[chat/session_stream_requests] session {session_id} 会话保存完成，历史条数 {len(session_store[session_id])}"
             )
+
+        except ClientDisconnectError:
+            # 客户端断联，连接已关闭，不推送error事件，丢弃本轮会话
+            logger.info(f"[chat/session_stream_requests] session={session_id} 客户端断开连接，本轮会话丢弃")
+            return
+
+        except LLMBaseError as exc:
+            # 业务异常：LLMNetworkError / LLMHttpError / LLMValueError等
+            err_data = json.dumps({"code": exc.code, "msg": exc.msg})
+            yield {"event": "error", "data": err_data}
+
+        except Exception as exc:
+            # 兜底未知异常
+            logger.exception(f"[chat/session_stream_requests] session={session_id} SSE生成异常 err={repr(exc)}")
+            err_data = json.dumps({"code": 500, "msg": "流式服务内部未知错误"})
+            yield {"event": "error", "data": err_data}
 
     return EventSourceResponse(stream_generator())
 
@@ -257,7 +274,7 @@ async def chat_session_stream_with_httpx(req: SessionChatRequest):
         )
     except Exception as e:
         logger.exception(f"[chat/session_stream_httpx] session={session_id} 消息校验失败 err={repr(e)}")
-        raise HTTPException(status_code=400, detail=f"消息格式非法: {e}")
+        raise MessageValidateError(code=ERR_MSG_VALIDATE, msg=f"消息格式非法: {str(e)}") from e
 
     async def stream_generator():
         full_answer = ""
@@ -275,20 +292,30 @@ async def chat_session_stream_with_httpx(req: SessionChatRequest):
                     full_answer += chunk
                     yield {"event": "message", "data": chunk}
 
+            # 完整正常结束，推送done并保存会话
             yield {"event": "done", "data": full_answer}
             logger.info(
                 f"[chat/session_stream_httpx] session={session_id} 推送done事件，完整回答长度={len(full_answer)},分片数量={chunk_count}"
             )
+            session_store[session_id] = temp_messages + [{"role": "assistant", "content": full_answer}]
+            logger.info(
+                f"[chat/session_stream_httpx] session {session_id} 会话保存完成，历史条数 {len(session_store[session_id])}"
+            )
+
+        except ClientDisconnectError:
+            # 客户端断联，连接已关闭，不推送error事件，丢弃本轮会话
+            logger.info(f"[chat/session_stream_httpx] session={session_id} 客户端断开连接，本轮会话丢弃")
+            return
+
+        except LLMBaseError as exc:
+            # 业务异常：LLMNetworkError / LLMHttpError / LLMValueError等
+            err_data = json.dumps({"code": exc.code, "msg": exc.msg})
+            yield {"event": "error", "data": err_data}
 
         except Exception as exc:
             logger.exception(f"[chat/session_stream_httpx] session={session_id} SSE生成异常 err={repr(exc)}")
-            yield {"event": "error", "data": str(exc)}
-        finally:
-            session_store[session_id] = temp_messages + [{"role": "assistant", "content": full_answer}]
-            logger.info(
-                f"[chat/session_stream_httpx] session {session_id} finally保存会话完成，"
-                f"历史条数 {len(session_store[session_id])}, answer_len={len(full_answer)}"
-            )
+            err_data = json.dumps({"code": 500, "msg": "流式服务内部未知错误"})
+            yield {"event": "error", "data": err_data}
 
     return EventSourceResponse(stream_generator())
 

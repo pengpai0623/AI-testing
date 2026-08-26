@@ -1,5 +1,7 @@
 class LLMBaseError(Exception):
-    """业务基础异常，SDK所有异常父类"""
+    """
+    大模型业务领域的可预期业务错误，SDK所有异常父类
+    """
 
     def __init__(self, code: int, msg: str):
         self.code = code
@@ -58,5 +60,11 @@ class LLMConnectionError(LLMBaseError):
 
 class MessageValidateError(LLMBaseError):
     """内存组装的消息列表校验失败"""
+
+    pass
+
+
+class ClientDisconnectError(LLMBaseError):
+    """客户端主动断连（浏览器关闭页面)"""
 
     pass

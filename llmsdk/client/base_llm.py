@@ -19,6 +19,7 @@ from llmsdk.config.settings import (
 )
 from llmsdk.utils.common import struct_retry_log
 from llmsdk.utils.constants import (
+    ERR_CLIENT_DISCONNECT,
     ERR_CONNECT,
     ERR_LLM_HTTP,
     ERR_LLM_NETWORK,
@@ -28,6 +29,7 @@ from llmsdk.utils.constants import (
     RETRY_WAIT_SEC,
 )
 from llmsdk.utils.exceptions import (
+    ClientDisconnectError,
     LLMConnectionError,
     LLMHttpError,
     LLMNetworkError,
@@ -54,7 +56,10 @@ class LLMBaseClient:
         timeout: int,
         temperature: float,
     ) -> Generator[str, None, None]:
-        # 同步流式处理，完全保留不动
+        """
+        同步流式底层
+        注意：生成器函数 @retry 装饰器不生效；流式中途失败不会自动重试，重试逻辑交给上层业务
+        """
         if not isinstance(messages, list) or len(messages) == 0:
             raise LLMValueError(code=ERR_VALUE, msg="messages不能为空列表")
 
@@ -83,6 +88,9 @@ class LLMBaseClient:
         except requests.exceptions.HTTPError as e:
             code = resp.status_code if resp is not None else 0
             raise LLMHttpError(code=ERR_LLM_HTTP, msg=f"流式HTTP异常 {code}") from e
+        except requests.exceptions.ChunkedEncodingError as e:
+            # 客户端主动断开TCP连接
+            raise ClientDisconnectError(code=ERR_CLIENT_DISCONNECT, msg="客户端断开流式连接") from e
 
         for raw_line in resp.iter_lines():
             if not raw_line:
@@ -112,7 +120,10 @@ class LLMBaseClient:
         timeout: int,
         temperature: float,
     ) -> AsyncGenerator[str, None]:
-        # 异步流式处理，完全保留不动
+        """
+        异步流式处理
+        注意：异步生成器tenacity装饰器不生效，流式迭代中异常不会自动重试
+        """
         if not isinstance(messages, list) or len(messages) == 0:
             raise LLMValueError(code=ERR_VALUE, msg="messages不能为空列表")
 
@@ -153,12 +164,15 @@ class LLMBaseClient:
                         if "choices" in chunk and chunk["choices"] and "delta" in chunk["choices"][0]:
                             delta = chunk["choices"][0]["delta"].get("content", "")
                             if delta:
-                                yield chunk["choices"][0]["delta"].get("content", "")
+                                yield delta
 
             except httpx.TimeoutException as e:
                 raise LLMNetworkError(code=ERR_LLM_NETWORK, msg=f"流式超时：{str(e)}") from e
             except httpx.ConnectError as e:
                 raise LLMNetworkError(code=ERR_LLM_NETWORK, msg=f"流式连接失败：{str(e)}") from e
+            except httpx.ReadError as e:
+                # 对端关闭连接，客户端断开
+                raise ClientDisconnectError(code=ERR_CLIENT_DISCONNECT, msg="客户端断开异步流式连接") from e
             except httpx.HTTPStatusError as e:
                 raise LLMHttpError(
                     code=ERR_LLM_HTTP,
@@ -192,8 +206,12 @@ class LLMBaseClient:
             resp.raise_for_status()
             resp_data = resp.json()
 
-            content = resp_data["choices"][0]["message"]["content"]
-            token_usage = resp_data["usage"]
+            # 防御：外部返回结构缺失key，封装解析异常
+            try:
+                content = resp_data["choices"][0]["message"]["content"]
+                token_usage = resp_data["usage"]
+            except (KeyError, IndexError) as e:
+                raise LLMSSEParseError(code=ERR_SSE_PARSE, msg=f"大模型返回数据结构异常: {str(e)}") from e
 
             return {
                 "content": content,
@@ -215,12 +233,12 @@ class LLMBaseClient:
         except Exception as e:
             raise LLMHttpError(code=ERR_LLM_HTTP, msg=f"请求未知异常 {str(e)}") from e
 
-    @retry(
-        stop=stop_after_attempt(MAX_RETRY_TIMES),
-        wait=wait_fixed(RETRY_WAIT_SEC),
-        retry=retry_if_exception_type((LLMNetworkError, LLMConnectionError)),
-        before_sleep=struct_retry_log,
-    )
+    # @retry(
+    #     stop=stop_after_attempt(MAX_RETRY_TIMES),
+    #     wait=wait_fixed(RETRY_WAIT_SEC),
+    #     retry=retry_if_exception_type((LLMNetworkError, LLMConnectionError)),
+    #     before_sleep=struct_retry_log,
+    # )
     async def _async_request_messages(self, messages: List[Dict[str, str]], timeout: int, temperature: float) -> Dict:
         """底层异步请求：成功返回 {content, prompt_tokens...}，失败直接raise自定义异常"""
         if not isinstance(messages, list) or len(messages) == 0:
@@ -243,8 +261,11 @@ class LLMBaseClient:
                 resp.raise_for_status()
                 resp_data = resp.json()
 
-                content = resp_data["choices"][0]["message"]["content"]
-                token_usage = resp_data["usage"]
+                try:
+                    content = resp_data["choices"][0]["message"]["content"]
+                    token_usage = resp_data["usage"]
+                except (KeyError, IndexError) as e:
+                    raise LLMSSEParseError(code=ERR_SSE_PARSE, msg=f"异步大模型返回数据结构异常: {str(e)}") from e
 
                 return {
                     "content": content,

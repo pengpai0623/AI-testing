@@ -59,3 +59,4 @@ ERR_PYDANTIC_VALIDATE = 4002  # PydanticValidateError 字段校验失败
 ERR_VALUE = 4003  # LLMValueError 数值非法
 ERR_CONNECT = 4004  # LLMConnectionError 连接业务异常
 ERR_MSG_VALIDATE = 4005  # MessageValidateError 消息列表校验失败
+ERR_CLIENT_DISCONNECT = 4006  # ClientDisconnectError 客户端主动断开SSE流式连接，属于正常结束，不是服务故障

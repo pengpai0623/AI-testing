@@ -57,7 +57,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# 2.捕获自定义业务异常 /LLMBaseError
+# 2.捕获自定义业务异常 /LLMBaseError及其子类
 @app.exception_handler(LLMBaseError)
 async def biz_exception_handler(request: Request, exc: LLMBaseError):
     logger.error(f"业务异常 code={exc.code}, msg={exc.msg}", exc_info=exc)
@@ -67,7 +67,7 @@ async def biz_exception_handler(request: Request, exc: LLMBaseError):
     )
 
 
-# 3.兜底捕获全部未处理Exception（500未知错误）
+# 3.兜底捕获全部未处理Exception如原生异常等（包括500未知错误）
 @app.exception_handler(Exception)
 async def global_unknown_exception_handler(request: Request, exc: Exception):
     logger.exception("服务器未知异常")
@@ -90,5 +90,6 @@ if __name__ == "__main__":
     server.main:app：模块server.main里面的app对象
     host="0.0.0.0"：允许局域网其他机器访问；写127.0.0.1只能本机访问
     reload=True：开发模式，生产环境一定要关闭
+    uvicorn server.main:app --host 0.0.0.0 --port 8000 --reload
     """
     uvicorn.run("server.main:app", host="0.0.0.0", port=8000, reload=True)

@@ -1,4 +1,6 @@
+import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -48,6 +50,13 @@ app = FastAPI(
     description="基于 FastAPI + llmsdk 的大模型接口服务",
     version="1.0.0",
 )
+
+
+# 避免 to_thread排队，设置更大的线程池
+@app.on_event("startup")
+async def startup():
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=64))
 
 
 # 1.捕获Pydantic请求校验异常（422）

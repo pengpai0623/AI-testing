@@ -26,10 +26,9 @@ from server.schemas.common_resp import ApiResponse
 router = APIRouter()
 
 llm_client = LLMBaseClient()
+
 # 实例化redis
 session_redis = SessionRedis()
-# 内存会话存储，仅开发使用；uvicorn多worker下失效，生产务必替换Redis
-session_store: dict[str, list] = {}
 
 
 # ========== 接口1：普通单轮问答 ==========
@@ -187,7 +186,7 @@ async def chat_session_stream_with_requests(req: SessionChatRequest):
     session_id = req.session_id
     logger.info(f"[chat/session_stream_requests] 收到请求, session_id={session_id}, prompt_len={len(req.prompt)}")
 
-    history = session_store.get(session_id, [])
+    history = await asyncio.to_thread(session_redis.get_session, session_id)
     logger.info(f"[chat/session_stream_requests] session={session_id} 当前历史消息数={len(history)}")
 
     if not history and req.system_prompt:
@@ -196,7 +195,7 @@ async def chat_session_stream_with_requests(req: SessionChatRequest):
     elif history and req.system_prompt:
         # 会话已存在，忽略新传入system_prompt，本会话不支持动态更新system
         logger.warning(
-            f"[chat/session_stream_httpx] session={session_id} 会话已存在，忽略传入的system_prompt，如需变更请使用新session_id"
+            f"[chat/session_stream_requests] session={session_id} 会话已存在，忽略传入的system_prompt，如需变更请使用新session_id"
         )
 
     temp_messages = history + [{"role": "user", "content": req.prompt}]
@@ -216,6 +215,7 @@ async def chat_session_stream_with_requests(req: SessionChatRequest):
         chunk_count = 0
         logger.info(f"[chat/session_stream_requests] session={session_id} 启动SSE生成器，开始拉取流式分片")
 
+        # 分片多会频繁线程调度,后续根据压测结果调整
         def _safe_next(it):
             try:
                 return next(it)
@@ -245,9 +245,10 @@ async def chat_session_stream_with_requests(req: SessionChatRequest):
             logger.info(
                 f"[chat/session_stream_requests] session={session_id} 推送done事件，完整回答长度={len(full_answer)}"
             )
-            session_store[session_id] = temp_messages + [{"role": "assistant", "content": full_answer}]
+            final_messages = temp_messages + [{"role": "assistant", "content": full_answer}]
+            await asyncio.to_thread(session_redis.set_session, session_id, final_messages)
             logger.info(
-                f"[chat/session_stream_requests] session {session_id} 会话保存完成，历史条数 {len(session_store[session_id])}"
+                f"[chat/session_stream_requests] session {session_id} 会话保存完成，历史条数 {len(final_messages)}"
             )
 
         except ClientDisconnectError:
@@ -280,7 +281,7 @@ async def chat_session_stream_with_httpx(req: SessionChatRequest):
     session_id = req.session_id
     logger.info(f"[chat/session_stream_httpx] 收到请求, session_id={session_id}, prompt_len={len(req.prompt)}")
 
-    history = session_store.get(session_id, [])
+    history = await asyncio.to_thread(session_redis.get_session, session_id)
     logger.info(f"[chat/session_stream_httpx] session={session_id} 当前历史消息数={len(history)}")
 
     if not history and req.system_prompt:
@@ -325,9 +326,10 @@ async def chat_session_stream_with_httpx(req: SessionChatRequest):
             logger.info(
                 f"[chat/session_stream_httpx] session={session_id} 推送done事件，完整回答长度={len(full_answer)},分片数量={chunk_count}"
             )
-            session_store[session_id] = temp_messages + [{"role": "assistant", "content": full_answer}]
+            final_messages = temp_messages + [{"role": "assistant", "content": full_answer}]
+            await asyncio.to_thread(session_redis.set_session, session_id, final_messages)
             logger.info(
-                f"[chat/session_stream_httpx] session {session_id} 会话保存完成，历史条数 {len(session_store[session_id])}"
+                f"[chat/session_stream_httpx] session {session_id} 会话保存完成，历史条数 {len(final_messages)}"
             )
 
         except ClientDisconnectError:
@@ -354,4 +356,4 @@ async def chat_session_stream_with_httpx(req: SessionChatRequest):
 @router.get("/health", summary="服务健康检查")
 def health_check():
     logger.info("[chat/health] 健康检查请求")
-    return {"status": "ok", "service": "llm-api"}
+    return ApiResponse(code=CODE_OK, msg="ok", data={"status": "ok", "service": "llm-api"})

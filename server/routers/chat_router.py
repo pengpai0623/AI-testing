@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from sse_starlette.sse import EventSourceResponse
 
 from llmsdk.client.base_llm import LLMBaseClient
@@ -13,6 +13,7 @@ from llmsdk.utils.exceptions import (
     LLMHttpError,
     MessageValidateError,
 )
+from llmsdk.utils.session_redis import SessionRedis
 from server.models.chat_models import (
     MessageItem,
     SessionChatRequest,
@@ -25,7 +26,8 @@ from server.schemas.common_resp import ApiResponse
 router = APIRouter()
 
 llm_client = LLMBaseClient()
-
+# 实例化redis
+session_redis = SessionRedis()
 # 内存会话存储，仅开发使用；uvicorn多worker下失效，生产务必替换Redis
 session_store: dict[str, list] = {}
 
@@ -71,7 +73,8 @@ def chat_session(req: SessionChatRequest):
     session_id = req.session_id
     logger.info(f"[chat/session] 收到请求 session_id={session_id}, prompt_len={len(req.prompt)}")
 
-    history = session_store.get(session_id, [])
+    # SessionRedis内部已经捕获redis异常并抛出自定义RedisError系列，无需外层try，职责清晰
+    history = session_redis.get_session(session_id)
     logger.info(f"[chat/session] session={session_id} 当前历史消息数={len(history)}")
 
     if not history and req.system_prompt:
@@ -80,7 +83,7 @@ def chat_session(req: SessionChatRequest):
     elif history and req.system_prompt:
         # 会话已存在，忽略新传入system_prompt，本会话不支持动态更新system
         logger.warning(
-            f"[chat/session_stream_httpx] session={session_id} 会话已存在，忽略传入的system_prompt，如需变更请使用新session_id"
+            f"[chat/session] session={session_id} 会话已存在，忽略传入的system_prompt，如需变更请使用新session_id"
         )
 
     temp_messages = history + [{"role": "user", "content": req.prompt}]
@@ -103,13 +106,14 @@ def chat_session(req: SessionChatRequest):
         raise LLMHttpError(code=ERR_LLM_HTTP, msg="大模型返回内容为空")
 
     # 调用成功才更新会话
-    session_store[session_id] = temp_messages + [{"role": "assistant", "content": content}]
-    logger.info(f"[chat/session] session={session_id} 会话已更新，总消息数={len(session_store[session_id])}")
+    final_messages = temp_messages + [{"role": "assistant", "content": content}]
+    session_redis.set_session(session_id, final_messages)
+    logger.info(f"[chat/session] session={session_id} 会话已更新，总消息数={len(final_messages)}")
 
     resp = SessionChatResponse(
         session_id=session_id,
         answer=content,
-        history_count=len(session_store[session_id]),
+        history_count=len(final_messages),
         prompt_tokens=answer["prompt_tokens"],
         completion_tokens=answer["completion_tokens"],
         total_tokens=answer["total_tokens"],
@@ -126,16 +130,16 @@ async def async_chat_session(req: SessionChatRequest):
     session_id = req.session_id
     logger.info(f"[chat/async_session] 收到请求 session_id={session_id}, prompt_len={len(req.prompt)}")
 
-    history = session_store.get(session_id, [])
+    # 先使用线程池实现，后续可考虑使用aioredis实现全异步，没有压测数据，避免过早做过度优化
+    history = await asyncio.to_thread(session_redis.get_session, session_id)
     logger.info(f"[chat/async_session] session={session_id} 当前历史消息数={len(history)}")
 
     if not history and req.system_prompt:
         logger.info(f"[chat/async_session] session={session_id} 首次会话写入system_prompt")
         history.append({"role": "system", "content": req.system_prompt})
     elif history and req.system_prompt:
-        # 会话已存在，忽略新传入system_prompt，本会话不支持动态更新system
         logger.warning(
-            f"[chat/session_stream_httpx] session={session_id} 会话已存在，忽略传入的system_prompt，如需变更请使用新session_id"
+            f"[chat/async_session] session={session_id} 会话已存在，忽略传入的system_prompt，如需变更请使用新session_id"
         )
 
     temp_messages = history + [{"role": "user", "content": req.prompt}]
@@ -157,13 +161,15 @@ async def async_chat_session(req: SessionChatRequest):
         logger.error(f"[chat/async_session] session={session_id} 大模型返回content为空")
         raise LLMHttpError(code=ERR_LLM_HTTP, msg="大模型返回内容为空")
 
-    session_store[session_id] = temp_messages + [{"role": "assistant", "content": content}]
-    logger.info(f"[chat/async_session] session={session_id} 会话更新完成，总消息数={len(session_store[session_id])}")
+    final_messages = temp_messages + [{"role": "assistant", "content": content}]
+    # set_session 同步redis操作，同样to_thread
+    await asyncio.to_thread(session_redis.set_session, session_id, final_messages)
+    logger.info(f"[chat/async_session] session={session_id} 会话已更新，总消息数={len(final_messages)}")
 
     resp = SessionChatResponse(
         session_id=session_id,
         answer=content,
-        history_count=len(session_store[session_id]),
+        history_count=len(final_messages),
         prompt_tokens=answer["prompt_tokens"],
         completion_tokens=answer["completion_tokens"],
         total_tokens=answer["total_tokens"],

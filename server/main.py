@@ -24,6 +24,9 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
             f"client_ip={client_ip} user_id={user_id}"
         )
         try:
+            # 非流式接口，会持续到大模型调用返回结束，所以接口耗时完整准确，异常也可被全局异常捕获
+            # 流式，仅包括构造 EventSourceResponse 对象耗时，不包含大模型调用、chunk产出时间，所以接口完整耗时有很大误差；
+            # 统计耗时、异常处理需在stream_generator内部实现
             response = await call_next(request)
         except Exception as e:
             cost_ms = round((time.perf_counter() - start_time) * 1000, 2)

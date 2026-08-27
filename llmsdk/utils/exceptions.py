@@ -68,3 +68,21 @@ class ClientDisconnectError(LLMBaseError):
     """客户端主动断连（浏览器关闭页面)"""
 
     pass
+
+
+class RedisTimeoutError(LLMBaseError):
+    """Redis请求超时"""
+
+    pass
+
+
+class RedisConnectionError(LLMBaseError):
+    """Redis连接异常"""
+
+    pass
+
+
+class RedisError(LLMBaseError):
+    """Redis通用异常"""
+
+    pass

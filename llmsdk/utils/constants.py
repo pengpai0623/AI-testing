@@ -60,3 +60,12 @@ ERR_VALUE = 4003  # LLMValueError 数值非法
 ERR_CONNECT = 4004  # LLMConnectionError 连接业务异常
 ERR_MSG_VALIDATE = 4005  # MessageValidateError 消息列表校验失败
 ERR_CLIENT_DISCONNECT = 4006  # ClientDisconnectError 客户端主动断开SSE流式连接，属于正常结束，不是服务故障
+
+# 5xxx：Redis会话管理类错误
+ERR_REDIS_CONNECTION = 5001  # RedisConnectionError Redis连接异常
+ERR_REDIS_TIMEOUT = 5002  # RedisTimeoutError Redis请求超时
+ERR_REDIS_ERROR = 5003  # RedisError Redis操作异常
+
+# redis 会话管理
+REDIS_URL = "redis://127.0.0.1:6379/0"
+SESSION_TTL_SEC = 3600 * 24 * 1  # 会话过期时间，单位秒，默认7天

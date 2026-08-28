@@ -2,17 +2,19 @@ import json
 from typing import Any, Dict, List
 
 import redis
-from redis.exceptions import ConnectionError, RedisError, TimeoutError
+from redis.exceptions import ConnectionError, RedisError, TimeoutError, WatchError
 
 from llmsdk.utils.constants import (
     ERR_REDIS_CONNECTION,
     ERR_REDIS_ERROR,
     ERR_REDIS_TIMEOUT,
+    ERR_VALUE,
     REDIS_URL,
     SESSION_TTL_SEC,
 )
 from llmsdk.utils.exceptions import (
     JsonParseError,
+    LLMValueError,
     RedisConnectionError,
     RedisError,
     RedisTimeoutError,
@@ -27,7 +29,7 @@ class SessionRedis:
     """
 
     def __init__(self, redis_url: str = REDIS_URL):
-        self.client = redis.from_url(redis_url)
+        self.client = redis.from_url(redis_url, decode_responses=True)
         self.prefix = "llm:session:"
 
     def get_session(self, session_id: str) -> List[Dict[str, Any]]:
@@ -88,6 +90,39 @@ class SessionRedis:
             raise RedisTimeoutError(ERR_REDIS_TIMEOUT, msg=f"Redis请求超时: {e}") from e
         except RedisError as e:
             raise RedisError(ERR_REDIS_ERROR, msg=f"Redis操作异常: {e}") from e
+
+    def safe_set_session_with_watch(self, session_id: str, messages: list):
+        """
+        带WATCH乐观锁安全写入会话
+        发生竞态冲突抛出 LLMValueError；Redis网络异常抛Redis系列异常
+        """
+        key = self.prefix + session_id
+        if not isinstance(messages, list):
+            raise LLMValueError(code=ERR_VALUE, msg="messages必须为list类型")
+        if len(messages) == 0:
+            raise LLMValueError(code=ERR_VALUE, msg="messages不能为空列表，必须传入合法对话消息")
+
+        try:
+            msg_json = json.dumps(messages, ensure_ascii=False)
+        except json.JSONDecodeError as e:
+            raise JsonParseError(ERR_REDIS_ERROR, msg=f"Redis数据序列化失败: {e}") from e
+
+        try:
+            # 复用同一个client实例，pipeline共用同一份连接配置
+            with self.client.pipeline() as pipe:
+                pipe.watch(key)
+                pipe.multi()
+                pipe.set(key, msg_json, ex=SESSION_TTL_SEC)
+                pipe.execute()
+        except WatchError:
+            # 事务被拒绝：期间该session被其他请求修改，发生竞态
+            raise LLMValueError(code=ERR_VALUE, msg="会话正在处理中，请稍后再发送消息")
+        except ConnectionError as e:
+            raise RedisConnectionError(ERR_REDIS_CONNECTION, msg=f"Redis连接异常(watch): {e}") from e
+        except TimeoutError as e:
+            raise RedisTimeoutError(ERR_REDIS_TIMEOUT, msg=f"Redis请求超时(watch): {e}") from e
+        except RedisError as e:
+            raise RedisError(ERR_REDIS_ERROR, msg=f"Redis操作异常(watch): {e}") from e
 
 
 if __name__ == "__main__":

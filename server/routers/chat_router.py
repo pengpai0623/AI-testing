@@ -104,9 +104,9 @@ def chat_session(req: SessionChatRequest):
         logger.error(f"[chat/session] session={session_id} 大模型返回content为空")
         raise LLMHttpError(code=ERR_LLM_HTTP, msg="大模型返回内容为空")
 
-    # 调用成功才更新会话
+    # 调用成功才更新会话，使用带乐观锁写入
     final_messages = temp_messages + [{"role": "assistant", "content": content}]
-    session_redis.set_session(session_id, final_messages)
+    session_redis.safe_set_session_with_watch(session_id, final_messages)
     logger.info(f"[chat/session] session={session_id} 会话已更新，总消息数={len(final_messages)}")
 
     resp = SessionChatResponse(
@@ -162,7 +162,8 @@ async def async_chat_session(req: SessionChatRequest):
 
     final_messages = temp_messages + [{"role": "assistant", "content": content}]
     # set_session 同步redis操作，同样to_thread
-    await asyncio.to_thread(session_redis.set_session, session_id, final_messages)
+    # await asyncio.to_thread(session_redis.set_session, session_id, final_messages)
+    await asyncio.to_thread(session_redis.safe_set_session_with_watch, session_id, final_messages)
     logger.info(f"[chat/async_session] session={session_id} 会话已更新，总消息数={len(final_messages)}")
 
     resp = SessionChatResponse(
@@ -246,7 +247,8 @@ async def chat_session_stream_with_requests(req: SessionChatRequest):
                 f"[chat/session_stream_requests] session={session_id} 推送done事件，完整回答长度={len(full_answer)}"
             )
             final_messages = temp_messages + [{"role": "assistant", "content": full_answer}]
-            await asyncio.to_thread(session_redis.set_session, session_id, final_messages)
+            # await asyncio.to_thread(session_redis.set_session, session_id, final_messages)
+            await asyncio.to_thread(session_redis.safe_set_session_with_watch, session_id, final_messages)
             logger.info(
                 f"[chat/session_stream_requests] session {session_id} 会话保存完成，历史条数 {len(final_messages)}"
             )
@@ -327,7 +329,8 @@ async def chat_session_stream_with_httpx(req: SessionChatRequest):
                 f"[chat/session_stream_httpx] session={session_id} 推送done事件，完整回答长度={len(full_answer)},分片数量={chunk_count}"
             )
             final_messages = temp_messages + [{"role": "assistant", "content": full_answer}]
-            await asyncio.to_thread(session_redis.set_session, session_id, final_messages)
+            # await asyncio.to_thread(session_redis.set_session, session_id, final_messages)
+            await asyncio.to_thread(session_redis.safe_set_session_with_watch, session_id, final_messages)
             logger.info(
                 f"[chat/session_stream_httpx] session {session_id} 会话保存完成，历史条数 {len(final_messages)}"
             )

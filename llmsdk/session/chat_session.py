@@ -129,10 +129,10 @@ class ChatSession:
                 max_completion_tokens=max_completion_tokens,
             )
             resp = llm.chat_with_messages(messages=self.messages, timeout=timeout, temperature=temperature)
-        except Exception:
+        except Exception as e:
             # 任何异常都回滚刚插入的 user 消息，再向上抛出
             self.messages.pop()
-            raise
+            raise e from e
 
         self._add_assistant_msg(resp["content"])
         return resp
@@ -175,7 +175,7 @@ class ChatSession:
         except Exception as e:
             logger.error(f"流式异常：{repr(e)}，回滚用户消息")
             self.messages.pop()
-            return
+            raise e from e
 
 
 if __name__ == "__main__":

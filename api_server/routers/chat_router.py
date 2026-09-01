@@ -126,10 +126,15 @@ async def chat_session_stream_with_httpx(req: SessionChatRequest):
     """
     session_id = req.session_id
     logger.info(f"[chat_router/session_stream_httpx] 收到请求, session_id={session_id}, prompt_len={len(req.prompt)}")
+
+    # 会话加载、消息校验、上下文截断等预处理放在此处（生成器外部）执行，
+    # 否则预处理阶段的异常会进入生成器内部，只能通过SSE error事件返回，无法复用全局异常处理器。
+    # 本阶段抛出的Redis、参数校验类异常直接向上冒泡，由FastAPI全局异常处理器捕获，返回标准JSON错误响应，不走SSE error事件通道。
     trimmed_messages = await chat_service.build_chat_prepare_messages(
         session_id=session_id, prompt=req.prompt, system_prompt=req.system_prompt
     )
     # 无需await，直接返回生成器给EventSourceResponse，内部迭代
+    # SSE生成器对象仅在EventSourceResponse内部迭代时才真正执行，generator只是得到了一个生成器对象，未执行任何逻辑
     generator = chat_service.chat_session_stream_httpx(
         session_id=session_id,
         temperature=req.temperature,

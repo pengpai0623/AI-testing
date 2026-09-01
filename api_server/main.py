@@ -7,11 +7,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from api_server.common.response import ApiResponse
+from api_server.routers import chat_router
 from llmsdk.utils import logger
 from llmsdk.utils.constants import CODE_OK, CODE_SERVER_ERROR, CODE_VALIDATE_ERROR
 from llmsdk.utils.exceptions import LLMBaseError, LLMSSEParseError
-from server.routers import chat_router
-from server.schemas.common_resp import ApiResponse
 
 
 class RequestLogMiddleware(BaseHTTPMiddleware):
@@ -99,9 +99,9 @@ if __name__ == "__main__":
     import uvicorn
 
     """
-    server.main:app：模块server.main里面的app对象
+    api_server.main:app：模块server.main里面的app对象
     host="0.0.0.0"：允许局域网其他机器访问；写127.0.0.1只能本机访问
     reload=True：开发模式，生产环境一定要关闭
-    uvicorn server.main:app --host 0.0.0.0 --port 8000 --reload
+    uvicorn api_server.main:app --host 0.0.0.0 --port 8000 --reload
     """
-    uvicorn.run("server.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("api_server.main:app", host="0.0.0.0", port=8000, reload=True)

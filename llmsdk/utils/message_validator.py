@@ -1,6 +1,6 @@
 from pydantic import ValidationError
 
-from server.models.chat_models import MessageItem
+from llmsdk.common.schemas import MessageItem
 
 
 def validate_messages(messages: list[dict]) -> list[dict]:

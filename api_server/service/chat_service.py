@@ -41,15 +41,27 @@ class ChatService:
         system_prompt: Optional[str],
     ) -> List[Dict]:
         """
-        会话预处理公共逻辑：
-        1.读取redis历史会话
-        2.system_prompt规则处理（仅空会话生效）
-        3.拼接本轮用户消息
-        4.MessageItem格式校验
-        5.token上下文截断
-        返回：经过token截断、可直接传给LLM的messages列表
+        会话预处理公共方法，供所有多轮接口复用。
 
-        异常：Redis系列异常 / MessageValidateError / LLMValueError，全部向上抛出，交给上层全局异常处理器
+        执行流程：
+        1. 从 Redis 读取会话历史消息
+        2. system_prompt 仅在空会话时生效；已存在会话忽略传入的 system_prompt
+        3. 拼接本轮用户消息
+        4. 通过 MessageItem 做消息格式校验
+        5. 按 token 上限做上下文截断
+
+        Args:
+            session_id: 会话唯一标识
+            prompt: 本轮用户提问
+            system_prompt: 系统提示词，仅首次会话生效
+
+        Returns:
+            经过 token 截断、可直接传给 LLM 的 messages 列表
+
+        Raises:
+            RedisConnectionError / RedisTimeoutError / RedisError: Redis 读取异常
+            MessageValidateError: 消息格式校验失败
+            LLMValueError: system 消息 token 超出可用窗口，无法截断
         """
         tag = "[chat_service/build_chat_prepare_messages]"
         logger.info(f"{tag} session={session_id} 开始会话预处理")
@@ -90,8 +102,18 @@ class ChatService:
 
     def chat_single(self, prompt: str, system_prompt: Optional[str], temperature: Optional[float]):
         """
-        单轮问答，无会话上下文
-        业务日志全部放在service；底层异常直接向上抛出，不捕获
+        单轮问答，无会话上下文，不读写 Redis。
+
+        Args:
+            prompt: 用户提问
+            system_prompt: 系统提示词（可选）
+            temperature: 模型温度参数（可选）
+
+        Returns:
+            LLM 原始响应字典，包含 content、prompt_tokens、completion_tokens、total_tokens
+
+        Raises:
+            LLMBaseError: LLM 调用层异常（网络、HTTP、超时等），直接向上抛出
         """
         logger.info(
             f"[chat_service/single] 开始调用llm_client.chat_single, temperature={temperature}, prompt_len={len(prompt)}"
@@ -110,7 +132,25 @@ class ChatService:
         self, session_id: str, prompt: str, system_prompt: Optional[str], temperature: Optional[float]
     ) -> Tuple[Dict, int]:
         """
-        非流式同步llm调用，多轮对话接口
+        多轮非流式对话（兜底接口），底层使用同步 requests LLM 调用，通过 asyncio.to_thread 避免阻塞事件循环。
+
+        执行流程：预处理 → 同步 LLM 调用 → 校验返回 content → 写入 Redis 会话 → 返回结果
+
+        Args:
+            session_id: 会话唯一标识
+            prompt: 本轮用户提问
+            system_prompt: 系统提示词，仅首次会话生效
+            temperature: 模型温度参数
+
+        Returns:
+            (LLM 响应字典, 会话总消息数)
+
+        Raises:
+            RedisConnectionError / RedisTimeoutError / RedisError: Redis 读写异常
+            MessageValidateError: 消息格式校验失败
+            LLMValueError: 上下文截断失败或乐观锁竞态冲突
+            LLMHttpError: LLM 返回 content 为空
+            LLMBaseError: LLM 调用层异常
         """
         logger.info(
             f"[chat_service/session] 开始处理多轮对话, session_id={session_id}, temperature={temperature}, prompt_len={len(prompt)}"
@@ -140,10 +180,25 @@ class ChatService:
         self, session_id: str, prompt: str, system_prompt: Optional[str], temperature: Optional[float]
     ) -> Tuple[Dict, int]:
         """
-        非流式异步，异步多轮对话接口，session_id维护上下文
-        - session_id: 会话ID
-        - prompt: 用户本轮提问
-        - system_prompt: 仅首次会话生效
+        多轮非流式对话（主接口），底层使用异步 httpx LLM 调用，原生协程不阻塞事件循环。
+
+        执行流程：预处理 → 异步 LLM 调用 → 校验返回 content → 写入 Redis 会话 → 返回结果
+
+        Args:
+            session_id: 会话唯一标识
+            prompt: 本轮用户提问
+            system_prompt: 系统提示词，仅首次会话生效
+            temperature: 模型温度参数
+
+        Returns:
+            (LLM 响应字典, 会话总消息数)
+
+        Raises:
+            RedisConnectionError / RedisTimeoutError / RedisError: Redis 读写异常
+            MessageValidateError: 消息格式校验失败
+            LLMValueError: 上下文截断失败或乐观锁竞态冲突
+            LLMHttpError: LLM 返回 content 为空
+            LLMBaseError: LLM 调用层异常
         """
 
         logger.info(
@@ -174,9 +229,27 @@ class ChatService:
         trimmed_messages: List[Dict],
     ) -> AsyncGenerator[Dict, None]:
         """
-        流式同步，SSE流式，底层同步requests实现；
-        trimmed_messages由router调用build_chat_prepare_messages得到，不在本生成器读取redis
-        yield事件：message / done / error
+        SSE 流式对话（同步 requests 底层），异步生成器。
+
+        trimmed_messages 由调用方在生成器外部通过 build_chat_prepare_messages 预处理得到，
+        本生成器内部不读取 Redis、不做消息校验，确保预处理阶段异常走全局异常返回 JSON。
+
+        执行流程：同步 LLM 流式迭代（to_thread 包装）→ 逐片 yield message →
+        流式结束后写入 Redis 会话 → yield done
+
+        Yields:
+            {"event": "message", "data": "<分片文本>"}: LLM 流式分片
+            {"event": "done", "data": "<JSON: {full_answer, msg_count}>"}: 流式正常结束
+            {"event": "error", "data": "<JSON: {code, msg}>"}: 流式运行时异常
+
+        Args:
+            session_id: 会话唯一标识
+            temperature: 模型温度参数
+            trimmed_messages: 预处理后的消息列表，直接传给 LLM
+
+        Note:
+            客户端断开连接时静默丢弃本轮会话，不推送 error 事件；
+            生成器内部所有异常均被捕获并转换为 error 事件，不会向上冒泡。
         """
         logger.info(f"[chat_service/session_stream_requests] session={session_id} 启动SSE生成器，开始拉取流式分片")
         full_answer = ""
@@ -249,8 +322,28 @@ class ChatService:
         trimmed_messages: List[Dict],
     ) -> AsyncGenerator[Dict, None]:
         """
-        流式异步，SSE流式，底层异步httpx；全部业务收敛service层
-        yield事件：message / done / error
+        SSE 流式对话（异步 httpx 底层，主接口），异步生成器。
+
+        trimmed_messages 由调用方在生成器外部通过 build_chat_prepare_messages 预处理得到，
+        本生成器内部不读取 Redis、不做消息校验，确保预处理阶段异常走全局异常返回 JSON。
+
+        执行流程：异步 LLM 流式迭代（async for）→ 逐片 yield message →
+        流式结束后写入 Redis 会话 → yield done
+
+        Yields:
+            {"event": "message", "data": "<分片文本>"}: LLM 流式分片
+            {"event": "done", "data": "<JSON: {full_answer, msg_count}>"}: 流式正常结束
+            {"event": "error", "data": "<JSON: {code, msg}>"}: 流式运行时异常
+
+        Args:
+            session_id: 会话唯一标识
+            temperature: 模型温度参数
+            trimmed_messages: 预处理后的消息列表，直接传给 LLM
+
+        Note:
+            客户端断开连接时静默丢弃本轮会话，不推送 error 事件；
+            httpx 异步请求支持事件循环即时取消，客户端断开后不会等待下一个分片；
+            生成器内部所有异常均被捕获并转换为 error 事件，不会向上冒泡。
         """
         full_answer = ""
         chunk_count = 0

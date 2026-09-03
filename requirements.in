@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+httpx
+requests
+redis
+sse-starlette
+python-dotenv
+tenacity
+loguru
+python-multipart
+tiktoken

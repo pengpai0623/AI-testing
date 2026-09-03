@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Any, Dict, List
 
 import redis
@@ -28,8 +29,12 @@ class SessionRedis:
     实例化SessionRedis()的时候，不会做连接测试。只有第一次调用get/set才会真正发生网络连接
     """
 
-    def __init__(self, redis_url: str = REDIS_URL):
-        self.client = redis.from_url(redis_url, decode_responses=True)
+    def __init__(self, redis_url: str = None):
+        if redis_url:
+            self.url = redis_url
+        else:
+            self.url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+        self.client = redis.from_url(self.url, decode_responses=True)
         self.prefix = "llm:session:"
 
     def get_session(self, session_id: str) -> List[Dict[str, Any]]:

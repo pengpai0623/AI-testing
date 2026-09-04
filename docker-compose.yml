@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: llm-chat-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    # redis数据持久化，容器删除数据不丢失
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  chat-api:
+    build: .
+    container_name: llm-chat-api
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    # compose内部网络，服务名直接做hostname，api访问redis直接写 redis:6379
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+
+volumes:
+  redis_data:

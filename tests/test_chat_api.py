@@ -1,6 +1,5 @@
 """
 全接口E2E测试 - 主路径验证
-
 前置条件：
   1. uvicorn main:app 已启动（默认 http://127.0.0.1:8000）
   2. Redis 已启动且可连接
@@ -9,6 +8,14 @@
 运行方式：
   pytest tests/test_chat_api.py -v
   API_BASE_URL=http://your-host:8000 pytest tests/test_chat_api.py -v
+
+注意事项：
+1. 限流用例使用Redis滑动窗口，共享Redis状态；多次执行需要等待窗口过期或清空redis key
+2. SSE接口：路由层预处理异常(Pydantic/参数校验)直接返回JSON，不走text/event-stream；
+   生成器内部异常才会走SSE error事件通道
+3. 两层校验区分：
+   - Pydantic max_length：HTTP入参单字段超长，code=422，发生在router之前
+   - ChatService上下文校验：历史+prompt拼接后总上下文超限，业务错误码，进入service后抛出
 """
 
 import json
@@ -59,7 +66,7 @@ async def test_single_chat_success(client: AsyncClient):
 
 
 async def test_single_missing_prompt_422(client: AsyncClient):
-    """缺少必填prompt，FastAPI返回422参数校验错误"""
+    """缺少必填prompt，FastAPI Pydantic参数校验返回422"""
     resp = await client.post("/chat/single", json={})
     body = resp.json()
     assert body["code"] == 422
@@ -197,3 +204,93 @@ async def test_cross_session_nonstream_to_stream(client: AsyncClient, session_id
         full_answer = "".join(messages)
         assert "李四" in full_answer, f"跨接口上下文互通失败，流式回答未包含'李四'，实际：{full_answer}"
         assert done_data["msg_count"] == 4, f"跨接口会话msg_count应为4，实际{done_data['msg_count']}"
+
+
+# ============================================================
+# 业务校验：prompt / system_prompt 长度超限校验（Pydantic入参层）
+# ============================================================
+
+
+async def test_single_prompt_too_long(client: AsyncClient):
+    """单轮问答 prompt 超出pydantic max_length，请求参数校验失败 code=422"""
+    long_prompt = "你好".ljust(5000, "a")
+    resp = await client.post("/chat/single", json={"prompt": long_prompt})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 422
+
+
+async def test_async_session_prompt_too_long(client: AsyncClient, session_id: str):
+    """多轮非流式 prompt超出pydantic max_length，参数校验失败 code=422"""
+    long_prompt = "测试".ljust(5000, "x")
+    resp = await client.post("/chat/async_session", json={"session_id": session_id, "prompt": long_prompt})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 422
+
+
+async def test_stream_httpx_prompt_too_long_not_sse(client: AsyncClient, session_id: str):
+    """
+    SSE接口prompt超出pydantic max_length：
+    路由预处理阶段直接拦截，返回普通JSON响应，不是text/event-stream流式；
+    异常发生在生成器对象迭代之前，不走SSE error事件
+    """
+    long_prompt = "测试".ljust(5000, "z")
+    resp = await client.post("/chat/session_stream_httpx", json={"session_id": session_id, "prompt": long_prompt})
+    assert resp.status_code == 200
+    content_type = resp.headers.get("content-type", "")
+    assert "text/event-stream" not in content_type
+    body = resp.json()
+    assert body["code"] == 422
+
+
+# ============================================================
+# Redis分布式滑动窗口限流测试
+# 注意：共享Redis key，多轮pytest执行会互相影响；可清空redis或者等待窗口过期
+# ============================================================
+
+
+async def test_chat_rate_limit_trigger(client: AsyncClient):
+    """
+    高频调用接口触发Redis分布式滑动窗口限流，全局异常处理器转换返回code=42900，http=200
+    前置：constants中MAX_REQUEST_PER_WINDOW设置较小，方便e2e触发
+    """
+    url = "/chat/single"
+    payload = {"prompt": "hi"}
+
+    limited = False
+    for _ in range(50):
+        r = await client.post(url, json=payload)
+        j = r.json()
+        print(f"rate limit debug resp: {j}")
+        if j["code"] == 42900:
+            limited = True
+            break
+    assert limited, "多次请求后未触发限流，检查rate_limiter_dep配置、确认MAX_REQUEST_PER_WINDOW数值"
+
+    # 限流命中后再次请求依然是限流错误
+    resp_limited = await client.post(url, json=payload)
+    j_limited = resp_limited.json()
+    assert j_limited["code"] == 42900
+    assert "请求过于频繁" in j_limited["msg"]
+
+
+# ============================================================
+# 全局异常兜底：404、405，校验统一返回JSON格式
+# ============================================================
+
+
+async def test_global_404_not_found(client: AsyncClient):
+    """访问不存在路由，校验全局异常处理器统一返回业务JSON结构"""
+    resp = await client.post("/chat/not_exist_route", json={"prompt": "hi"})
+    body = resp.json()
+    assert "code" in body
+    assert "msg" in body
+
+
+async def test_global_405_method_not_allowed(client: AsyncClient):
+    """接口请求方法不匹配，校验全局异常处理器统一返回业务JSON结构"""
+    resp = await client.get("/chat/single")
+    body = resp.json()
+    assert "code" in body
+    assert "msg" in body

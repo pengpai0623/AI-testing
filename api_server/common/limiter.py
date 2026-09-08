@@ -48,8 +48,10 @@ async def rate_limiter_dep(request: Request):
         if current_count >= MAX_REQUEST_PER_WINDOW:
             raise HTTPException(status_code=429, detail="请求过于频繁，请稍后重试")
 
+    except HTTPException:
+        raise
     except Exception as e:
-        # redis异常降级：限流防护失效，直接放行业务，不阻断接口
+        # 只有Redis/IO等底层异常才降级放行
         logger.error(f"[RATE_LIMIT_REDIS_ERROR] skip rate limit, err={str(e)}")
 
     return True

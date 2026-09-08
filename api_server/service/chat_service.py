@@ -2,6 +2,7 @@ import asyncio
 import json
 from typing import AsyncGenerator, Dict, Generator, List, Optional, Tuple
 
+from api_server.common.param_validator import check_chat_input
 from api_server.db.chat_db import ChatDB
 from llmsdk.client.base_llm import LLMBaseClient
 from llmsdk.common.schemas import MessageItem
@@ -12,7 +13,10 @@ from llmsdk.utils.constants import (
     DEFAULT_MAX_TOKEN,
     ERR_LLM_HTTP,
     ERR_MSG_VALIDATE,
+    ERR_PARAM_TOO_LONG,
     MAX_COMPLETION_TOKEN,
+    PROMPT_MAX_CHARS,
+    SYSTEM_PROMPT_MAX_CHARS,
 )
 from llmsdk.utils.exceptions import (
     ClientDisconnectError,
@@ -34,6 +38,22 @@ class ChatService:
         self.llm_client = LLMBaseClient()
         self.chat_db = ChatDB()
 
+    def _validate_input_length(self, prompt: str, system_prompt: Optional[str]) -> None:
+        """
+        【私有实例方法】校验prompt / system_prompt字符长度
+        内部封装 check_chat_input，抛出 ParamTooLongError(ERR_PARAM_TOO_LONG)
+        """
+        logger.info(
+            f"[chat_service/_validate_input_length] "
+            f"prompt_len={len(prompt)}, system_prompt_len={len(system_prompt) if system_prompt else 0}"
+        )
+        check_chat_input(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            prompt_max_chars=PROMPT_MAX_CHARS,
+            system_max_chars=SYSTEM_PROMPT_MAX_CHARS,
+        )
+
     async def build_chat_prepare_messages(
         self,
         session_id: str,
@@ -42,13 +62,15 @@ class ChatService:
     ) -> List[Dict]:
         """
         会话预处理公共方法，供所有多轮接口复用。
+        ⚠️【调用契约】本方法内部已执行 prompt / system_prompt 字符长度校验，调用方无需手动调用 check_chat_input。
 
         执行流程：
-        1. 从 Redis 读取会话历史消息
-        2. system_prompt 仅在空会话时生效；已存在会话忽略传入的 system_prompt
-        3. 拼接本轮用户消息
-        4. 通过 MessageItem 做消息格式校验
-        5. 按 token 上限做上下文截断
+        1. prompt、system_prompt长度校验
+        2. 从 Redis 读取会话历史消息
+        3. system_prompt 仅在空会话时生效；已存在会话忽略传入的 system_prompt
+        4. 拼接本轮用户消息
+        5. 通过 MessageItem 做消息格式校验
+        6. 按 token 上限做上下文截断
 
         Args:
             session_id: 会话唯一标识
@@ -59,12 +81,15 @@ class ChatService:
             经过 token 截断、可直接传给 LLM 的 messages 列表
 
         Raises:
+            ParamTooLongError: prompt/system_prompt字符超过最大长度限制
             RedisConnectionError / RedisTimeoutError / RedisError: Redis 读取异常
             MessageValidateError: 消息格式校验失败
             LLMValueError: system 消息 token 超出可用窗口，无法截断
         """
         tag = "[chat_service/build_chat_prepare_messages]"
         logger.info(f"{tag} session={session_id} 开始会话预处理")
+
+        self._validate_input_length(prompt, system_prompt)
 
         # 先使用线程池实现，后续可考虑使用aioredis实现全异步，没有压测数据，避免过早做过度优化
         history = await asyncio.to_thread(self.chat_db.get_session, session_id)
@@ -103,6 +128,7 @@ class ChatService:
     def chat_single(self, prompt: str, system_prompt: Optional[str], temperature: Optional[float]):
         """
         单轮问答，无会话上下文，不读写 Redis。
+        ⚠️【调用契约】本方法内部自带字符长度校验，调用方无需手动调用 check_chat_input。
 
         Args:
             prompt: 用户提问
@@ -113,8 +139,11 @@ class ChatService:
             LLM 原始响应字典，包含 content、prompt_tokens、completion_tokens、total_tokens
 
         Raises:
+            ParamTooLongError: prompt/system_prompt字符超过最大长度限制
             LLMBaseError: LLM 调用层异常（网络、HTTP、超时等），直接向上抛出
         """
+
+        self._validate_input_length(prompt, system_prompt)
         logger.info(
             f"[chat_service/single] 开始调用llm_client.chat_single, temperature={temperature}, prompt_len={len(prompt)}"
         )

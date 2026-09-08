@@ -2,15 +2,22 @@ import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from api_server.common.limiter import get_client_ip, rate_limiter_dep
 from api_server.common.response import ApiResponse
 from api_server.routers import chat_router
 from llmsdk.utils import logger
-from llmsdk.utils.constants import CODE_OK, CODE_SERVER_ERROR, CODE_VALIDATE_ERROR
+from llmsdk.utils.constants import (
+    CODE_OK,
+    CODE_SERVER_ERROR,
+    CODE_VALIDATE_ERROR,
+    ERR_HTTP_BAD_HTTP_STATUS,
+    ERR_RATE_LIMIT,
+)
 from llmsdk.utils.exceptions import LLMBaseError, LLMSSEParseError
 
 
@@ -18,7 +25,7 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
     # 中间件处理，记录请求耗时、path、client_ip，把公共字段绑定到 loguru extra 上下文。
     async def dispatch(self, request: Request, call_next):
         start_time = time.perf_counter()
-        client_ip = request.client.host if request.client else ""
+        client_ip = client_ip = get_client_ip(request)
         user_id = request.headers.get("X-User-Id", "anonymous")
 
         logger.info(
@@ -52,11 +59,11 @@ app = FastAPI(
 )
 
 
-# 避免 to_thread排队，设置更大的线程池
-@app.on_event("startup")
-async def startup():
-    loop = asyncio.get_running_loop()
-    loop.set_default_executor(ThreadPoolExecutor(max_workers=64))
+# # 避免 to_thread排队，设置更大的线程池
+# @app.on_event("startup")
+# async def startup():
+#     loop = asyncio.get_running_loop()
+#     loop.set_default_executor(ThreadPoolExecutor(max_workers=64))
 
 
 # 1.捕获Pydantic请求校验异常（422）
@@ -69,7 +76,27 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# 2.捕获自定义业务异常 /LLMBaseError及其子类
+# 2.捕获FastAPI抛出的HTTPException（包含429限流、404、405等）
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """捕获FastAPI抛出的HTTPException，包含429限流、404、405等"""
+    client_ip = get_client_ip(request)
+
+    if exc.status_code == 429:
+        # 限流：使用独立业务错误码 ERR_RATE_LIMIT
+        logger.warning(f"[RATE_LIMIT] ip={client_ip}, msg={exc.detail}")
+        resp = ApiResponse(code=ERR_RATE_LIMIT, msg=exc.detail, data=None)
+        return JSONResponse(status_code=200, content=resp.model_dump())
+
+    # 其余404/405等http异常，统一使用公共业务错误码，detail保留原始信息给到前端
+    logger.warning(f"[HTTP_EXC] http_status={exc.status_code}, detail={exc.detail}, ip={client_ip}")
+    resp = ApiResponse(
+        code=ERR_HTTP_BAD_HTTP_STATUS, msg=f"http请求异常：{exc.detail}", data={"http_status": exc.status_code}
+    )
+    return JSONResponse(status_code=200, content=resp.model_dump())
+
+
+# 3.捕获自定义业务异常 /LLMBaseError及其子类
 @app.exception_handler(LLMBaseError)
 async def biz_exception_handler(request: Request, exc: LLMBaseError):
     logger.error(f"业务异常 code={exc.code}, msg={exc.msg}", exc_info=exc)
@@ -79,7 +106,7 @@ async def biz_exception_handler(request: Request, exc: LLMBaseError):
     )
 
 
-# 3.兜底捕获全部未处理Exception如原生异常等（包括500未知错误）
+# 4.兜底捕获全部未处理Exception如原生异常等（包括500未知错误）
 @app.exception_handler(Exception)
 async def global_unknown_exception_handler(request: Request, exc: Exception):
     logger.exception("服务器未知异常")
@@ -89,10 +116,21 @@ async def global_unknown_exception_handler(request: Request, exc: Exception):
     )
 
 
-# ✅全局注册中间件
+# 全局注册中间件
 app.add_middleware(RequestLogMiddleware)
 
-app.include_router(chat_router.router, prefix="/chat", tags=["同/异步多轮对话及流式返回"])
+"""
+HTTP Request → FastAPI → 匹配 /chat/*路由
+    → rate_limiter_dep（内存限流，429直接返回JSON）
+    → Pydantic解析请求模型
+    → 进入router接口函数
+        → 调用chat_service业务层
+            → service内部完成prompt/system_prompt长度校验、会话处理、LLM调用
+"""
+
+app.include_router(
+    chat_router.router, prefix="/chat", tags=["同/异步多轮对话及流式返回"], dependencies=[Depends(rate_limiter_dep)]
+)
 
 
 if __name__ == "__main__":

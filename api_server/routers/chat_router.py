@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from sse_starlette.sse import EventSourceResponse
 
+from api_server.common.param_validator import check_chat_input
 from api_server.common.response import ApiResponse
 from api_server.models.chat_models import (
     SessionChatRequest,
@@ -10,7 +11,12 @@ from api_server.models.chat_models import (
 )
 from api_server.service.chat_service import ChatService
 from llmsdk.utils import logger
-from llmsdk.utils.constants import CODE_OK
+from llmsdk.utils.constants import (
+    CODE_OK,
+    ERR_PARAM_TOO_LONG,
+    PROMPT_MAX_CHARS,
+    SYSTEM_PROMPT_MAX_CHARS,
+)
 
 router = APIRouter()
 chat_service = ChatService()
@@ -25,7 +31,7 @@ def chat_single(req: SingleChatRequest):
     - system_prompt: 系统提示词（可选）
     - temperature: 模型温度参数（可选）
     """
-    logger.info(f"[chat_router/single] 收到请求, temperature={req.temperature}, prompt_len={len(req.prompt)}")
+    logger.info(f"[chat_router/single] 收到请求")
     result = chat_service.chat_single(
         prompt=req.prompt,
         system_prompt=req.system_prompt,
@@ -52,7 +58,7 @@ async def chat_session(req: SessionChatRequest):
     > 兜底接口，业务优先使用 /async_session（httpx异步版本）
     """
     session_id = req.session_id
-    logger.info(f"[chat_router/session] 收到请求 session_id={session_id}, prompt_len={len(req.prompt)}")
+    logger.info(f"[chat_router/session] 收到请求 session_id={session_id}")
     result, msg_count = await chat_service.chat_session(
         session_id=session_id, prompt=req.prompt, system_prompt=req.system_prompt, temperature=req.temperature
     )
@@ -78,7 +84,7 @@ async def async_chat_session(req: SessionChatRequest):
     - system_prompt: 仅首次会话生效
     """
     session_id = req.session_id
-    logger.info(f"[chat_router/async_session] 收到请求 session_id={session_id}, prompt_len={len(req.prompt)}")
+    logger.info(f"[chat_router/async_session] 收到请求 session_id={session_id}")
     answer, msg_count = await chat_service.async_chat_session(
         session_id=session_id, prompt=req.prompt, system_prompt=req.system_prompt, temperature=req.temperature
     )
@@ -102,9 +108,7 @@ async def chat_session_stream_with_requests(req: SessionChatRequest):
     事件：message分片 / done结束 / error异常
     """
     session_id = req.session_id
-    logger.info(
-        f"[chat_router/session_stream_requests] 收到请求, session_id={session_id}, prompt_len={len(req.prompt)}"
-    )
+    logger.info(f"[chat_router/session_stream_requests] 收到请求, session_id={session_id}")
     # router return之前执行公共预处理，异常走全局异常JSON返回
     trimmed_messages = await chat_service.build_chat_prepare_messages(
         session_id=session_id, prompt=req.prompt, system_prompt=req.system_prompt
@@ -125,7 +129,7 @@ async def chat_session_stream_with_httpx(req: SessionChatRequest):
     事件：message分片 / done结束 / error异常
     """
     session_id = req.session_id
-    logger.info(f"[chat_router/session_stream_httpx] 收到请求, session_id={session_id}, prompt_len={len(req.prompt)}")
+    logger.info(f"[chat_router/session_stream_httpx] 收到请求, session_id={session_id}")
 
     # 会话加载、消息校验、上下文截断等预处理放在此处（生成器外部）执行，
     # 否则预处理阶段的异常会进入生成器内部，只能通过SSE error事件返回，无法复用全局异常处理器。

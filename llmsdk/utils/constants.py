@@ -61,12 +61,27 @@ ERR_VALUE = 4003  # LLMValueError 数值非法
 ERR_CONNECT = 4004  # LLMConnectionError 连接业务异常
 ERR_MSG_VALIDATE = 4005  # MessageValidateError 消息列表校验失败
 ERR_CLIENT_DISCONNECT = 4006  # ClientDisconnectError 客户端主动断开SSE流式连接，属于正常结束，不是服务故障
+ERR_PARAM_TOO_LONG = 4007  # ParamTooLongError 请求参数过长，超过限制
 
 # 5xxx：Redis会话管理类错误
 ERR_REDIS_CONNECTION = 5001  # RedisConnectionError Redis连接异常
 ERR_REDIS_TIMEOUT = 5002  # RedisTimeoutError Redis请求超时
 ERR_REDIS_ERROR = 5003  # RedisError Redis操作异常
 
+# HTTP 层面异常（404/405 等路由层面问题）
+ERR_HTTP_BAD_HTTP_STATUS = 40001
+# 请求过于频繁，触发限流
+ERR_RATE_LIMIT = 42900  # RateLimitError 请求过于频繁，触发限流
+
 # redis 会话管理
 REDIS_URL = "redis://127.0.0.1:6379/0"
 SESSION_TTL_SEC = 3600 * 24 * 1  # 会话过期时间，单位秒，默认7天
+
+
+# 配置：窗口秒数、窗口内最大请求数
+WINDOW_SECONDS = 60
+MAX_REQUEST_PER_WINDOW = 20
+
+# 请求入参长度校验
+PROMPT_MAX_CHARS = 2000
+SYSTEM_PROMPT_MAX_CHARS = 1000

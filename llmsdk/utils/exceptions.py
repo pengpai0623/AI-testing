@@ -86,3 +86,9 @@ class RedisError(LLMBaseError):
     """Redis通用异常"""
 
     pass
+
+
+class ParamTooLongError(LLMBaseError):
+    """请求参数过长异常"""
+
+    pass

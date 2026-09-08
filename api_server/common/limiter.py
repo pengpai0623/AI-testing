@@ -36,7 +36,7 @@ async def rate_limiter_dep(request: Request):
         # 在子线程执行同步redis pipeline，不阻塞asyncio事件循环
         def _redis_limit_logic():
             pipe = session_redis.client.pipeline()
-            pipe.multi()  # 上锁，开启事务, 不会被其他请求插队, 解决竞态问题
+            # pipe.multi()  # 上锁，pipeline自动开启事务, 不会被其他请求插队, 解决竞态问题
             pipe.zremrangebyscore(redis_key, 0, window_start_ts)
             pipe.zcard(redis_key)
             pipe.zadd(redis_key, {now_ts: now_ts})

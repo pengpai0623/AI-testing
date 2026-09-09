@@ -66,7 +66,7 @@ app = FastAPI(
 #     loop.set_default_executor(ThreadPoolExecutor(max_workers=64))
 
 
-# 1.捕获Pydantic请求校验异常（422）
+# 1.捕获Pydantic请求校验异常（缺字段、类型错、超长）
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.warning("请求参数校验失败", exc_info=exc)

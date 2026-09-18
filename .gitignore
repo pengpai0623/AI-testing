@@ -8,3 +8,6 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Locust 压测结果文件
+tests/result_*.csv

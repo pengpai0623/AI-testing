@@ -80,7 +80,7 @@ SESSION_TTL_SEC = 3600 * 24 * 1  # 会话过期时间，单位秒，默认7天
 
 # 配置：窗口秒数、窗口内最大请求数
 WINDOW_SECONDS = 60
-MAX_REQUEST_PER_WINDOW = 20
+MAX_REQUEST_PER_WINDOW = 60
 
 # 请求入参长度校验
 PROMPT_MAX_CHARS = 2000
